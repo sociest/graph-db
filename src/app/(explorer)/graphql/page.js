@@ -12,93 +12,82 @@ const EXAMPLE_QUERIES = {
     label: "Listar Entidades",
     description: "Obtiene todas las entidades de la base de datos",
     query: `query ListEntities {
-  tablesListRows(
+  tablesDBListRows(
     databaseId: "${DB_ID}"
     tableId: "entities"
   ) {
     total
     rows {
-      $id
-      label
-      description
-      aliases
-      type
+      _id
+      data
     }
   }
 }`,
   },
   getEntity: {
     label: "Obtener Entidad",
-    description: "Obtiene una entidad por su ID",
-    query: `query GetEntity($rowId: String!) {
-  tablesGetRow(
+    description: "Obtiene una entidad por su ID (reemplaza ENTITY_ID)",
+    query: `query GetEntity {
+  tablesDBGetRow(
     databaseId: "${DB_ID}"
     tableId: "entities"
-    rowId: $rowId
+    rowId: "<ENTITY_ID>"
   ) {
-    $id
-    label
-    description
-    aliases
-    type
+    _id
+    _tableId
+    _databaseId
+    _createdAt
+    _updatedAt
+    data
   }
 }`,
-    variables: { rowId: "<ENTITY_ID>" },
   },
   listClaims: {
     label: "Listar Claims",
     description: "Obtiene todas las declaraciones/afirmaciones",
     query: `query ListClaims {
-  tablesListRows(
+  tablesDBListRows(
     databaseId: "${DB_ID}"
     tableId: "claims"
   ) {
     total
     rows {
-      $id
-      subject
-      property
-      value_raw
-      value_relation
-      rank
+      _id
+      data
     }
   }
 }`,
   },
   searchEntities: {
     label: "Buscar Entidades",
-    description: "Busca entidades que contengan un texto",
+    description: "Busca entidades que contengan 'Persona' en label",
     query: `query SearchEntities {
-  tablesListRows(
+  tablesDBListRows(
     databaseId: "${DB_ID}"
     tableId: "entities"
     queries: ["{\\"method\\":\\"contains\\",\\"column\\":\\"label\\",\\"values\\":[\\"Persona\\"]}"]
   ) {
     total
     rows {
-      $id
-      label
-      description
+      _id
+      data
     }
   }
 }`,
   },
   entityWithClaims: {
-    label: "Entidad con Claims",
-    description: "Obtiene claims de una entidad específica",
+    label: "Claims de Entidad",
+    description: "Obtiene claims de una entidad específica (reemplaza ENTITY_ID)",
     query: `query EntityClaims {
-  tablesListRows(
+  tablesDBListRows(
     databaseId: "${DB_ID}"
     tableId: "claims"
     queries: ["{\\"method\\":\\"equal\\",\\"column\\":\\"subject\\",\\"values\\":[\\"<ENTITY_ID>\\"]}"]
   ) {
     total
     rows {
-      $id
-      property
-      value_raw
-      value_relation
-      rank
+      _id
+      data
     }
   }
 }`,
@@ -144,10 +133,25 @@ function convertToCSV(data, separator = ",") {
 
   if (rows.length === 0) return "";
 
-  const headers = [...new Set(rows.flatMap((row) => Object.keys(row)))];
+  // Procesar rows para expandir el campo "data" si existe (formato TablesDB)
+  const processedRows = rows.map(row => {
+    if (row && row.data && typeof row.data === "string") {
+      try {
+        const parsed = JSON.parse(row.data);
+        return { _id: row._id, ...parsed };
+      } catch {
+        return row;
+      }
+    } else if (row && row.data && typeof row.data === "object") {
+      return { _id: row._id, ...row.data };
+    }
+    return row;
+  });
+
+  const headers = [...new Set(processedRows.flatMap((row) => Object.keys(row)))];
   const csvRows = [headers.join(separator)];
   
-  for (const row of rows) {
+  for (const row of processedRows) {
     const values = headers.map((h) => {
       const val = row[h];
       if (val === null || val === undefined) return "";
@@ -280,6 +284,7 @@ export default function GraphQLPage() {
     }
     findRows(result);
 
+    // Si no encontramos rows, buscar en result.data para getRow
     if (rows.length === 0 && result.data) {
       const values = Object.values(result.data);
       if (values.length > 0 && typeof values[0] === "object" && !Array.isArray(values[0])) {
@@ -287,8 +292,23 @@ export default function GraphQLPage() {
       }
     }
 
-    const headers = [...new Set(rows.flatMap((row) => Object.keys(row)))];
-    return { headers, rows };
+    // Procesar rows para expandir el campo "data" si existe (formato TablesDB)
+    const processedRows = rows.map(row => {
+      if (row && row.data && typeof row.data === "string") {
+        try {
+          const parsed = JSON.parse(row.data);
+          return { _id: row._id, ...parsed };
+        } catch {
+          return row;
+        }
+      } else if (row && row.data && typeof row.data === "object") {
+        return { _id: row._id, ...row.data };
+      }
+      return row;
+    });
+
+    const headers = [...new Set(processedRows.flatMap((row) => Object.keys(row)))];
+    return { headers, rows: processedRows };
   }
 
   function getTotal() {
@@ -346,8 +366,8 @@ export default function GraphQLPage() {
                 <div className="wdqs-help">
                   <h4>💡 Ayuda Rápida</h4>
                   <ul>
-                    <li><code>tablesListRows</code> - Listar registros</li>
-                    <li><code>tablesGetRow</code> - Obtener un registro</li>
+                    <li><code>tablesDBListRows</code> - Listar registros</li>
+                    <li><code>tablesDBGetRow</code> - Obtener un registro</li>
                     <li>Usa <code>queries</code> para filtrar</li>
                   </ul>
                 </div>
