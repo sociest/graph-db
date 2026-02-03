@@ -11,7 +11,7 @@ import { useAuth } from "@/context/AuthContext";
  */
 export default function Navigation() {
   const [showAuthModal, setShowAuthModal] = useState(false);
-  const { isAdmin } = useAuth();
+  const { isAdmin, isAuthenticated } = useAuth();
 
   return (
     <>
@@ -39,12 +39,6 @@ export default function Navigation() {
               <span className="icon-code"></span>
               <span>GraphQL</span>
             </Link>
-            {isAdmin && (
-              <Link href="/admin" className="nav-link">
-                <span className="icon-settings"></span>
-                <span>Admin</span>
-              </Link>
-            )}
           </div>
 
           <div className="nav-user">

@@ -1374,6 +1374,42 @@
   color: var(--color-text-muted);
   text-transform: uppercase;
   border-bottom: 1px solid var(--color-border-light);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.team-selector-dropdown .manage-teams-link {
+  font-size: 0.75rem;
+  color: var(--color-primary);
+  text-decoration: none;
+  text-transform: none;
+}
+
+.team-selector-dropdown .manage-teams-link:hover {
+  text-decoration: underline;
+}
+
+.no-teams-message {
+  padding: var(--spacing-md);
+  text-align: center;
+  color: var(--color-text-muted);
+}
+
+.no-teams-message p {
+  margin: 0 0 var(--spacing-sm) 0;
+  font-size: 0.875rem;
+}
+
+.create-team-link {
+  color: var(--color-primary);
+  text-decoration: none;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.create-team-link:hover {
+  text-decoration: underline;
 }
 
 .team-option {
@@ -1530,6 +1566,10 @@
 
 .nav-link .icon-settings::before {
   content: "⚙️";
+}
+
+.icon-team::before {
+  content: "👥";
 }
 
 .logout-btn {

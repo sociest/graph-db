@@ -27,7 +27,7 @@ import {
 export default function EntityPage({ params }) {
   const { id } = use(params);
   const router = useRouter();
-  const { user, canEdit, canDelete, canCreate, loading: authLoading } = useAuth();
+  const { user, activeTeam, canEdit, canDelete, canCreate, loading: authLoading } = useAuth();
   
   const [entity, setEntity] = useState(null);
   const [claims, setClaims] = useState([]);
@@ -103,12 +103,14 @@ export default function EntityPage({ params }) {
 
   // ==================== CLAIM HANDLERS ====================
   async function handleCreateClaim(data) {
-    const result = await createClaim(data);
+    const teamId = activeTeam?.$id || null;
+    const result = await createClaim(data, teamId);
     await logAction("create", {
       entityType: "claim",
       entityId: result.$id,
       userId: user?.$id,
       userName: user?.name,
+      teamId: teamId,
       newData: data,
       metadata: { subjectId: id },
     });
@@ -140,12 +142,14 @@ export default function EntityPage({ params }) {
 
   // ==================== QUALIFIER HANDLERS ====================
   async function handleCreateQualifier(data) {
-    const result = await createQualifier(data);
+    const teamId = activeTeam?.$id || null;
+    const result = await createQualifier(data, teamId);
     await logAction("create", {
       entityType: "qualifier",
       entityId: result.$id,
       userId: user?.$id,
       userName: user?.name,
+      teamId: teamId,
       newData: data,
     });
     await loadEntity();
@@ -176,12 +180,14 @@ export default function EntityPage({ params }) {
 
   // ==================== REFERENCE HANDLERS ====================
   async function handleCreateReference(data) {
-    const result = await createReference(data);
+    const teamId = activeTeam?.$id || null;
+    const result = await createReference(data, teamId);
     await logAction("create", {
       entityType: "reference",
       entityId: result.$id,
       userId: user?.$id,
       userName: user?.name,
+      teamId: teamId,
       newData: data,
     });
     await loadEntity();

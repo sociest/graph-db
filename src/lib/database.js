@@ -1,4 +1,4 @@
-import { tablesDB, Query } from "./appwrite";
+import { tablesDB, Query, Permission, Role } from "./appwrite";
 
 // Configuración de la base de datos
 const DATABASE_ID = process.env.NEXT_PUBLIC_APPWRITE_DATABASE_ID;
@@ -8,6 +8,31 @@ const TABLES = {
   QUALIFIERS: "qualifiers",
   REFERENCES: "references",
 };
+
+/**
+ * Genera los permisos para un registro basándose en el team
+ * @param {string} teamId - ID del team que crea el registro
+ * @param {Object} options - Opciones adicionales
+ * @returns {string[]} Array de permisos de Appwrite
+ */
+function generatePermissions(teamId, options = {}) {
+  const permissions = [];
+  
+  // Permisos de lectura: cualquiera puede leer (datos públicos)
+  // permissions.push(Permission.read(Role.any()));
+  
+  if (teamId) {
+    // Solo el team creador puede actualizar y eliminar
+    permissions.push(Permission.update(Role.team(teamId)));
+    permissions.push(Permission.delete(Role.team(teamId)));
+  } else {
+    // Si no hay team, solo usuarios autenticados pueden editar
+    // permissions.push(Permission.update(Role.users()));
+    // permissions.push(Permission.delete(Role.users()));
+  }
+  
+  return permissions;
+}
 
 // ============================================
 // ENTITIES
@@ -78,8 +103,12 @@ export async function listEntities(limit = 25, offset = 0) {
 
 /**
  * Crea una nueva entidad
+ * @param {Object} data - Datos de la entidad
+ * @param {string} teamId - ID del team que crea la entidad (opcional)
  */
-export async function createEntity(data) {
+export async function createEntity(data, teamId = null) {
+  const permissions = generatePermissions(teamId);
+  
   const result = await tablesDB.createRow({
     databaseId: DATABASE_ID,
     tableId: TABLES.ENTITIES,
@@ -89,6 +118,7 @@ export async function createEntity(data) {
       description: data.description || null,
       aliases: data.aliases || [],
     },
+    permissions,
   });
 
   return result;
@@ -192,8 +222,12 @@ export async function getClaim(claimId) {
 
 /**
  * Crea un nuevo claim
+ * @param {Object} data - Datos del claim
+ * @param {string} teamId - ID del team que crea el claim (opcional)
  */
-export async function createClaim(data) {
+export async function createClaim(data, teamId = null) {
+  const permissions = generatePermissions(teamId);
+  
   const result = await tablesDB.createRow({
     databaseId: DATABASE_ID,
     tableId: TABLES.CLAIMS,
@@ -204,6 +238,7 @@ export async function createClaim(data) {
       value_raw: data.value_raw ? JSON.stringify(data.value_raw) : null,
       value_relation: data.value_relation || null,
     },
+    permissions,
   });
 
   return result;
@@ -233,8 +268,12 @@ export async function getQualifiersByClaim(claimId) {
 
 /**
  * Crea un nuevo qualifier
+ * @param {Object} data - Datos del qualifier
+ * @param {string} teamId - ID del team que crea el qualifier (opcional)
  */
-export async function createQualifier(data) {
+export async function createQualifier(data, teamId = null) {
+  const permissions = generatePermissions(teamId);
+  
   const result = await tablesDB.createRow({
     databaseId: DATABASE_ID,
     tableId: TABLES.QUALIFIERS,
@@ -245,6 +284,7 @@ export async function createQualifier(data) {
       value_raw: data.value_raw ? JSON.stringify(data.value_raw) : null,
       value_relation: data.value_relation || null,
     },
+    permissions,
   });
 
   return result;
@@ -274,8 +314,12 @@ export async function getReferencesByClaim(claimId) {
 
 /**
  * Crea una nueva referencia
+ * @param {Object} data - Datos de la referencia
+ * @param {string} teamId - ID del team que crea la referencia (opcional)
  */
-export async function createReference(data) {
+export async function createReference(data, teamId = null) {
+  const permissions = generatePermissions(teamId);
+  
   const result = await tablesDB.createRow({
     databaseId: DATABASE_ID,
     tableId: TABLES.REFERENCES,
@@ -285,6 +329,7 @@ export async function createReference(data) {
       details: data.details || null,
       reference: data.reference || null,
     },
+    permissions,
   });
 
   return result;

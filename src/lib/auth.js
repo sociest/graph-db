@@ -1,5 +1,7 @@
-import { account, teams } from "./appwrite";
-import { ID } from "appwrite";
+import { account, teams, ID } from "./appwrite";
+
+// Roles predeterminados para los teams
+export const DEFAULT_TEAM_ROLES = ["owner", "admin", "editor", "viewer"];
 
 /**
  * Verifica si la autenticación está habilitada
@@ -202,5 +204,127 @@ export async function getUserMembershipInTeam(teamId) {
   } catch (error) {
     console.error("Error getting user membership:", error);
     return null;
+  }
+}
+
+/**
+ * Crea un nuevo team con roles predeterminados
+ * @param {string} name - Nombre del team
+ * @param {string[]} roles - Roles permitidos en el team (opcional)
+ */
+export async function createTeam(name, roles = DEFAULT_TEAM_ROLES) {
+  try {
+    const result = await teams.create({
+      teamId: ID.unique(),
+      name,
+      roles,
+    });
+    return result;
+  } catch (error) {
+    console.error("Error creating team:", error);
+    throw error;
+  }
+}
+
+/**
+ * Actualiza el nombre de un team
+ */
+export async function updateTeamName(teamId, name) {
+  try {
+    const result = await teams.updateName({
+      teamId,
+      name,
+    });
+    return result;
+  } catch (error) {
+    console.error("Error updating team name:", error);
+    throw error;
+  }
+}
+
+/**
+ * Elimina un team
+ */
+export async function deleteTeam(teamId) {
+  try {
+    await teams.delete({ teamId });
+    return true;
+  } catch (error) {
+    console.error("Error deleting team:", error);
+    throw error;
+  }
+}
+
+/**
+ * Invita a un usuario a un team
+ * @param {string} teamId - ID del team
+ * @param {string} email - Email del usuario a invitar
+ * @param {string[]} roles - Roles a asignar
+ * @param {string} url - URL de redirección después de aceptar
+ */
+export async function inviteToTeam(teamId, email, roles = ["viewer"], url) {
+  try {
+    const redirectUrl = url || `${window.location.origin}/teams/accept`;
+    const result = await teams.createMembership({
+      teamId,
+      roles,
+      email,
+      url: redirectUrl,
+    });
+    return result;
+  } catch (error) {
+    console.error("Error inviting to team:", error);
+    throw error;
+  }
+}
+
+/**
+ * Actualiza los roles de un miembro
+ */
+export async function updateMemberRoles(teamId, membershipId, roles) {
+  try {
+    const result = await teams.updateMembership({
+      teamId,
+      membershipId,
+      roles,
+    });
+    return result;
+  } catch (error) {
+    console.error("Error updating member roles:", error);
+    throw error;
+  }
+}
+
+/**
+ * Elimina un miembro del team
+ */
+export async function removeMember(teamId, membershipId) {
+  try {
+    await teams.deleteMembership({
+      teamId,
+      membershipId,
+    });
+    return true;
+  } catch (error) {
+    console.error("Error removing member:", error);
+    throw error;
+  }
+}
+
+/**
+ * Acepta una invitación a un team
+ */
+export async function acceptTeamInvite(teamId, membershipId, userId, secret) {
+  try {
+    const result = await teams.updateMembershipStatus({
+      teamId,
+      membershipId,
+      userId,
+      secret,
+    });
+    return result;
+  } catch (error) {
+    console.error("Error accepting team invite:", error);
+    throw error;
   }
 }

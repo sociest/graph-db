@@ -50,42 +50,52 @@ export default function UserMenu({ onLoginClick }) {
         </div>
         <div className="user-details">
           <span className="user-name">{user.name || user.email}</span>
-          {activeTeam && (
-            <button 
-              className="user-team-btn"
-              onClick={() => setShowTeamSelector(!showTeamSelector)}
-              title="Cambiar equipo"
-            >
-              <span className="team-indicator">
-                {isMainTeamMember && <span className="admin-badge">★</span>}
-                {activeTeam.name}
-              </span>
-              {userTeams.length > 1 && <span className="team-switch-icon">▾</span>}
-            </button>
-          )}
+          <button 
+            className="user-team-btn"
+            onClick={() => setShowTeamSelector(!showTeamSelector)}
+            title={userTeams.length > 0 ? "Cambiar equipo" : "Sin equipos"}
+          >
+            <span className="team-indicator">
+              {isMainTeamMember && <span className="admin-badge">★</span>}
+              {activeTeam ? activeTeam.name : "Sin equipo"}
+            </span>
+            <span className="team-switch-icon">▾</span>
+          </button>
         </div>
       </div>
 
       {/* Selector de Team */}
-      {showTeamSelector && userTeams.length > 1 && (
+      {showTeamSelector && (
         <div className="team-selector-dropdown">
           <div className="dropdown-header">
             <span>Cambiar equipo</span>
+            <Link href="/teams" className="manage-teams-link" onClick={() => setShowTeamSelector(false)}>
+              Gestionar
+            </Link>
           </div>
-          {userTeams.map((team) => (
-            <button
-              key={team.$id}
-              className={`team-option ${activeTeam?.$id === team.$id ? "active" : ""}`}
-              onClick={() => handleTeamSwitch(team)}
-            >
-              <span className="team-option-name">{team.name}</span>
-              {team.roles?.includes("owner") && <span className="role-badge owner">Owner</span>}
-              {team.roles?.includes("admin") && !team.roles?.includes("owner") && (
-                <span className="role-badge admin">Admin</span>
-              )}
-              {activeTeam?.$id === team.$id && <span className="check-icon">✓</span>}
-            </button>
-          ))}
+          {userTeams.length === 0 ? (
+            <div className="no-teams-message">
+              <p>No perteneces a ningún equipo</p>
+              <Link href="/teams" className="create-team-link" onClick={() => setShowTeamSelector(false)}>
+                + Crear equipo
+              </Link>
+            </div>
+          ) : (
+            userTeams.map((team) => (
+              <button
+                key={team.$id}
+                className={`team-option ${activeTeam?.$id === team.$id ? "active" : ""}`}
+                onClick={() => handleTeamSwitch(team)}
+              >
+                <span className="team-option-name">{team.name}</span>
+                {team.roles?.includes("owner") && <span className="role-badge owner">Owner</span>}
+                {team.roles?.includes("admin") && !team.roles?.includes("owner") && (
+                  <span className="role-badge admin">Admin</span>
+                )}
+                {activeTeam?.$id === team.$id && <span className="check-icon">✓</span>}
+              </button>
+            ))
+          )}
         </div>
       )}
       
@@ -123,17 +133,17 @@ export default function UserMenu({ onLoginClick }) {
         
         <div className="dropdown-divider"></div>
         
+        <Link href="/teams" className="dropdown-item">
+          <span className="icon-team"></span>
+          Gestionar Equipos
+        </Link>
+        
         {isAdmin && (
           <Link href="/admin" className="dropdown-item">
             <span className="icon-settings"></span>
             Administración
           </Link>
         )}
-        
-        <Link href="/graphql" className="dropdown-item">
-          <span className="icon-code"></span>
-          GraphQL Playground
-        </Link>
         
         <div className="dropdown-divider"></div>
         <button className="dropdown-item logout-btn" onClick={logout}>

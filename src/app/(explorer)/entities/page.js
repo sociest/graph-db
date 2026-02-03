@@ -11,7 +11,7 @@ const ITEMS_PER_PAGE = 25;
 
 export default function EntitiesListPage() {
   const router = useRouter();
-  const { user, canCreate, loading: authLoading } = useAuth();
+  const { user, activeTeam, canCreate, loading: authLoading } = useAuth();
   
   const [entities, setEntities] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -41,12 +41,14 @@ export default function EntitiesListPage() {
   }
 
   async function handleCreateEntity(data) {
-    const newEntity = await createEntity(data);
+    const teamId = activeTeam?.$id || null;
+    const newEntity = await createEntity(data, teamId);
     await logAction("create", {
       entityType: "entity",
       entityId: newEntity.$id,
       userId: user?.$id,
       userName: user?.name,
+      teamId: teamId,
       newData: data,
     });
     // Navegar a la nueva entidad
