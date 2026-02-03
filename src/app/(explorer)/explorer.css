@@ -1572,6 +1572,10 @@
   content: "👥";
 }
 
+.icon-import::before {
+  content: "📥";
+}
+
 .logout-btn {
   color: var(--color-error);
 }

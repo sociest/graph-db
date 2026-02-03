@@ -35,6 +35,12 @@ export default function Navigation() {
               <span className="icon-search"></span>
               <span>Buscar</span>
             </Link>
+            {isAuthenticated && (
+              <Link href="/import" className="nav-link">
+                <span className="icon-import"></span>
+                <span>Importar</span>
+              </Link>
+            )}
           </div>
 
           <div className="nav-user">
