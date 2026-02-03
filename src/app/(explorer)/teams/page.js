@@ -173,35 +173,37 @@ export default function TeamsPage() {
 
   if (authLoading) {
     return (
-      <>
+      <div className="explorer-layout">
         <Navigation />
-        <main className="main-content">
-          <LoadingState message="Cargando..." />
+        <main className="explorer-main">
+          <div className="explorer-container">
+            <LoadingState message="Cargando..." />
+          </div>
         </main>
-      </>
+      </div>
     );
   }
 
   if (!authEnabled) {
     return (
-      <>
+      <div className="explorer-layout">
         <Navigation />
-        <main className="main-content">
-          <div className="container">
+        <main className="explorer-main">
+          <div className="explorer-container">
             <div className="empty-state">
               <p>La autenticación no está habilitada</p>
             </div>
           </div>
         </main>
-      </>
+      </div>
     );
   }
 
   return (
-    <>
+    <div className="explorer-layout">
       <Navigation />
-      <main className="main-content">
-        <div className="container">
+      <main className="explorer-main">
+        <div className="explorer-container">
           <div className="page-header">
             <h1>Gestión de Equipos</h1>
             <button
@@ -292,11 +294,9 @@ export default function TeamsPage() {
                         <span className="team-name">{team.name}</span>
                         <div className="team-meta">
                           <span className="team-members-count">{team.total} miembros</span>
-                          {team.roles?.map((role) => (
-                            <span key={role} className={`role-badge small ${role}`}>
-                              {role}
-                            </span>
-                          ))}
+                          <span className={`role-badge small ${team.roles?.[0] || "viewer"}`}>
+                            {team.roles?.[0] || "viewer"}
+                          </span>
                         </div>
                       </div>
                       {activeTeam?.$id === team.$id && (
@@ -372,20 +372,18 @@ export default function TeamsPage() {
                               </div>
                             </div>
                             <div className="member-roles">
-                              {member.roles?.map((role) => (
-                                <span key={role} className={`role-badge ${role}`}>
-                                  {role}
-                                </span>
-                              ))}
+                              <span className={`role-badge ${member.roles?.[0] || "viewer"}`}>
+                                {member.roles?.[0] || "viewer"}
+                              </span>
                             </div>
-                            {isTeamAdmin(selectedTeam) && member.userId !== user?.$id && (
+                            {isTeamAdmin(selectedTeam) && member.userId !== user?.$id && !member.roles?.includes("owner") && (
                               <div className="member-actions">
                                 <select
                                   value={member.roles?.[0] || "viewer"}
                                   onChange={(e) => handleUpdateRole(member.$id, [e.target.value])}
                                   disabled={loading}
                                 >
-                                  {DEFAULT_TEAM_ROLES.map((role) => (
+                                  {DEFAULT_TEAM_ROLES.filter(r => r !== "owner").map((role) => (
                                     <option key={role} value={role}>
                                       {role}
                                     </option>
@@ -478,15 +476,16 @@ export default function TeamsPage() {
         }
 
         .teams-list-panel {
-          background: var(--color-surface);
-          border: 1px solid var(--color-border);
-          border-radius: 8px;
+          background: var(--color-bg-card, #ffffff);
+          border: 1px solid var(--color-border-light, #c8ccd1);
+          border-radius: var(--radius-lg, 8px);
           padding: 1.5rem;
         }
 
         .teams-list-panel h2 {
           margin-bottom: 1rem;
           font-size: 1.1rem;
+          color: var(--color-text, #202122);
         }
 
         .teams-list {
@@ -497,27 +496,29 @@ export default function TeamsPage() {
 
         .team-item {
           padding: 1rem;
-          border: 1px solid var(--color-border);
-          border-radius: 6px;
+          border: 1px solid var(--color-border-light, #c8ccd1);
+          border-radius: var(--radius-md, 4px);
           margin-bottom: 0.5rem;
           cursor: pointer;
           display: flex;
           justify-content: space-between;
           align-items: center;
           transition: all 0.2s;
+          background: var(--color-bg-card, #ffffff);
         }
 
         .team-item:hover {
-          background: var(--color-surface-hover);
+          background: var(--color-bg-alt, #eaecf0);
+          border-color: var(--color-border, #a2a9b1);
         }
 
         .team-item.selected {
-          border-color: var(--color-primary);
-          background: var(--color-primary-light);
+          border-color: var(--color-primary, #0645ad);
+          background: rgba(6, 69, 173, 0.05);
         }
 
         .team-item.active {
-          border-left: 3px solid var(--color-success);
+          border-left: 3px solid var(--color-success, #14866d);
         }
 
         .team-item-info {
@@ -527,6 +528,7 @@ export default function TeamsPage() {
         .team-name {
           font-weight: 600;
           display: block;
+          color: var(--color-text, #202122);
         }
 
         .team-meta {
@@ -535,21 +537,21 @@ export default function TeamsPage() {
           align-items: center;
           margin-top: 0.25rem;
           font-size: 0.85rem;
-          color: var(--color-text-secondary);
+          color: var(--color-text-secondary, #54595d);
         }
 
         .active-indicator {
-          background: var(--color-success);
+          background: var(--color-success, #14866d);
           color: white;
           padding: 0.25rem 0.5rem;
-          border-radius: 4px;
+          border-radius: var(--radius-sm, 2px);
           font-size: 0.75rem;
         }
 
         .team-details-panel {
-          background: var(--color-surface);
-          border: 1px solid var(--color-border);
-          border-radius: 8px;
+          background: var(--color-bg-card, #ffffff);
+          border: 1px solid var(--color-border-light, #c8ccd1);
+          border-radius: var(--radius-lg, 8px);
           padding: 1.5rem;
         }
 
@@ -559,17 +561,18 @@ export default function TeamsPage() {
           align-items: flex-start;
           margin-bottom: 2rem;
           padding-bottom: 1rem;
-          border-bottom: 1px solid var(--color-border);
+          border-bottom: 1px solid var(--color-border-light, #c8ccd1);
         }
 
         .team-details-header h2 {
           margin: 0;
+          color: var(--color-text, #202122);
         }
 
         .team-id {
-          color: var(--color-text-secondary);
+          color: var(--color-text-muted, #72777d);
           font-size: 0.85rem;
-          font-family: monospace;
+          font-family: var(--font-mono, monospace);
         }
 
         .team-actions {
@@ -586,6 +589,7 @@ export default function TeamsPage() {
 
         .section-header h3 {
           margin: 0;
+          color: var(--color-text, #202122);
         }
 
         .members-list {
@@ -599,9 +603,9 @@ export default function TeamsPage() {
           align-items: center;
           gap: 1rem;
           padding: 1rem;
-          background: var(--color-background);
-          border: 1px solid var(--color-border);
-          border-radius: 6px;
+          background: var(--color-bg, #f8f9fa);
+          border: 1px solid var(--color-border-light, #c8ccd1);
+          border-radius: var(--radius-md, 4px);
         }
 
         .member-info {
@@ -615,12 +619,13 @@ export default function TeamsPage() {
           width: 40px;
           height: 40px;
           border-radius: 50%;
-          background: var(--color-primary);
+          background: var(--color-primary, #0645ad);
           color: white;
           display: flex;
           align-items: center;
           justify-content: center;
           font-weight: 600;
+          font-size: 1rem;
         }
 
         .member-details {
@@ -630,18 +635,19 @@ export default function TeamsPage() {
 
         .member-name {
           font-weight: 600;
+          color: var(--color-text, #202122);
         }
 
         .member-email {
           font-size: 0.85rem;
-          color: var(--color-text-secondary);
+          color: var(--color-text-secondary, #54595d);
         }
 
         .pending-badge {
-          background: var(--color-warning);
-          color: var(--color-warning-text);
+          background: var(--color-warning, #fc3);
+          color: #333;
           padding: 0.125rem 0.5rem;
-          border-radius: 4px;
+          border-radius: var(--radius-sm, 2px);
           font-size: 0.75rem;
           margin-top: 0.25rem;
           width: fit-content;
@@ -659,15 +665,17 @@ export default function TeamsPage() {
         }
 
         .member-actions select {
-          padding: 0.25rem 0.5rem;
-          border: 1px solid var(--color-border);
-          border-radius: 4px;
-          background: var(--color-background);
+          padding: 0.375rem 0.5rem;
+          border: 1px solid var(--color-border-light, #c8ccd1);
+          border-radius: var(--radius-sm, 2px);
+          background: var(--color-bg-card, #ffffff);
+          font-size: 0.875rem;
+          color: var(--color-text, #202122);
         }
 
         .role-badge {
           padding: 0.25rem 0.5rem;
-          border-radius: 4px;
+          border-radius: var(--radius-sm, 2px);
           font-size: 0.75rem;
           font-weight: 600;
           text-transform: capitalize;
@@ -684,17 +692,17 @@ export default function TeamsPage() {
         }
 
         .role-badge.admin {
-          background: #dc3545;
+          background: #d33;
           color: white;
         }
 
         .role-badge.editor {
-          background: #28a745;
+          background: var(--color-success, #14866d);
           color: white;
         }
 
         .role-badge.viewer {
-          background: #6c757d;
+          background: var(--color-secondary, #54595d);
           color: white;
         }
 
@@ -711,7 +719,7 @@ export default function TeamsPage() {
           left: 0;
           right: 0;
           bottom: 0;
-          background: rgba(0, 0, 0, 0.5);
+          background: rgba(0, 0, 0, 0.6);
           display: flex;
           align-items: center;
           justify-content: center;
@@ -719,12 +727,14 @@ export default function TeamsPage() {
         }
 
         .modal {
-          background: var(--color-surface);
-          border-radius: 8px;
+          background: var(--color-bg-card, #ffffff);
+          border: 1px solid var(--color-border-light, #c8ccd1);
+          border-radius: var(--radius-lg, 8px);
           width: 100%;
           max-width: 500px;
           max-height: 90vh;
           overflow-y: auto;
+          box-shadow: var(--shadow-lg, 0 4px 16px rgba(0, 0, 0, 0.15));
         }
 
         .modal-header {
@@ -732,12 +742,14 @@ export default function TeamsPage() {
           justify-content: space-between;
           align-items: center;
           padding: 1rem 1.5rem;
-          border-bottom: 1px solid var(--color-border);
+          border-bottom: 1px solid var(--color-border-light, #c8ccd1);
+          background: var(--color-bg, #f8f9fa);
         }
 
         .modal-header h2 {
           margin: 0;
           font-size: 1.25rem;
+          color: var(--color-text, #202122);
         }
 
         .close-btn {
@@ -745,48 +757,68 @@ export default function TeamsPage() {
           border: none;
           font-size: 1.5rem;
           cursor: pointer;
-          color: var(--color-text-secondary);
+          color: var(--color-text-secondary, #54595d);
+          padding: 0;
+          line-height: 1;
+        }
+
+        .close-btn:hover {
+          color: var(--color-text, #202122);
         }
 
         .modal form {
           padding: 1.5rem;
+          background: var(--color-bg-card, #ffffff);
         }
 
         .form-group {
-          margin-bottom: 1rem;
+          margin-bottom: 1.25rem;
         }
 
         .form-group label {
           display: block;
           margin-bottom: 0.5rem;
           font-weight: 600;
+          color: var(--color-text, #202122);
         }
 
         .form-group input,
         .form-group select {
           width: 100%;
           padding: 0.75rem;
-          border: 1px solid var(--color-border);
-          border-radius: 6px;
+          border: 1px solid var(--color-border-light, #c8ccd1);
+          border-radius: var(--radius-md, 4px);
           font-size: 1rem;
+          background: var(--color-bg-card, #ffffff);
+          color: var(--color-text, #202122);
+        }
+
+        .form-group input:focus,
+        .form-group select:focus {
+          outline: none;
+          border-color: var(--color-primary, #0645ad);
+          box-shadow: 0 0 0 2px rgba(6, 69, 173, 0.1);
         }
 
         .form-group small {
-          color: var(--color-text-secondary);
+          color: var(--color-text-muted, #72777d);
           font-size: 0.85rem;
+          display: block;
+          margin-top: 0.25rem;
         }
 
         .modal-actions {
           display: flex;
           justify-content: flex-end;
-          gap: 0.5rem;
+          gap: 0.75rem;
           padding-top: 1rem;
-          border-top: 1px solid var(--color-border);
+          margin-top: 0.5rem;
+          border-top: 1px solid var(--color-border-light, #c8ccd1);
         }
 
         .alert {
           padding: 1rem;
-          border-radius: 6px;
+          border-radius: var(--radius-md, 4px);
           margin-bottom: 1rem;
           display: flex;
           justify-content: space-between;
@@ -794,15 +826,15 @@ export default function TeamsPage() {
         }
 
         .alert-error {
-          background: var(--color-error-light);
-          color: var(--color-error);
-          border: 1px solid var(--color-error);
+          background: rgba(211, 51, 51, 0.1);
+          color: var(--color-error, #d33);
+          border: 1px solid var(--color-error, #d33);
         }
 
         .alert-success {
-          background: var(--color-success-light);
-          color: var(--color-success);
-          border: 1px solid var(--color-success);
+          background: rgba(20, 134, 109, 0.1);
+          color: var(--color-success, #14866d);
+          border: 1px solid var(--color-success, #14866d);
         }
 
         .alert button {
@@ -811,53 +843,61 @@ export default function TeamsPage() {
           font-size: 1.25rem;
           cursor: pointer;
           color: inherit;
+          padding: 0;
+          line-height: 1;
         }
 
         .empty-state {
           text-align: center;
           padding: 3rem;
-          color: var(--color-text-secondary);
+          color: var(--color-text-secondary, #54595d);
+        }
+
+        .empty-state p {
+          margin: 0 0 1rem 0;
         }
 
         .btn {
           padding: 0.5rem 1rem;
           border: none;
-          border-radius: 6px;
+          border-radius: var(--radius-md, 4px);
           cursor: pointer;
           font-weight: 600;
           transition: all 0.2s;
+          font-size: 0.875rem;
         }
 
         .btn-sm {
           padding: 0.25rem 0.75rem;
-          font-size: 0.875rem;
+          font-size: 0.8rem;
         }
 
         .btn-primary {
-          background: var(--color-primary);
+          background: var(--color-primary, #0645ad);
           color: white;
         }
 
         .btn-primary:hover {
-          background: var(--color-primary-dark);
+          background: var(--color-primary-hover, #0b0080);
         }
 
         .btn-secondary {
-          background: var(--color-surface);
-          border: 1px solid var(--color-border);
+          background: var(--color-bg-card, #ffffff);
+          border: 1px solid var(--color-border, #a2a9b1);
+          color: var(--color-text, #202122);
         }
 
         .btn-secondary:hover {
-          background: var(--color-surface-hover);
+          background: var(--color-bg-alt, #eaecf0);
         }
 
         .btn-danger {
-          background: var(--color-error);
+          background: var(--color-error, #d33);
           color: white;
         }
 
         .btn-danger:hover {
-          background: var(--color-error-dark);
+          background: #b02828;
         }
 
         .btn:disabled {
@@ -871,6 +911,6 @@ export default function TeamsPage() {
           }
         }
       `}</style>
-    </>
+    </div>
   );
 }

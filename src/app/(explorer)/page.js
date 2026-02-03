@@ -149,6 +149,10 @@ export default function HomePage() {
 
       <footer className="explorer-footer">
         <p>Graph DB Explorer</p>
+        <Link href="/graphql" className="nav-link">
+          <span className="icon-code"></span>
+          <span>GraphQL</span>
+        </Link>
       </footer>
     </div>
   );

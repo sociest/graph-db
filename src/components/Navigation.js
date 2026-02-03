@@ -35,10 +35,6 @@ export default function Navigation() {
               <span className="icon-search"></span>
               <span>Buscar</span>
             </Link>
-            <Link href="/graphql" className="nav-link">
-              <span className="icon-code"></span>
-              <span>GraphQL</span>
-            </Link>
           </div>
 
           <div className="nav-user">
