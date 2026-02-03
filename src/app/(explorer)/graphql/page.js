@@ -94,6 +94,143 @@ const EXAMPLE_QUERIES = {
   },
 };
 
+// Mutations de ejemplo para CRUD
+const MUTATION_EXAMPLES = {
+  createEntity: {
+    label: "Crear Entidad",
+    description: "Crea una nueva entidad (ítem o propiedad)",
+    query: `mutation CreateEntity {
+  tablesCreateRow(
+    databaseId: "${DB_ID}"
+    tableId: "entities"
+    rowId: "unique()"
+    data: "{\\"type\\":\\"item\\",\\"label\\":\\"Nueva Entidad\\",\\"description\\":\\"Descripción de la entidad\\",\\"aliases\\":[],\\"sitelinks\\":{}}"
+  ) {
+    _id
+    _createdAt
+    _updatedAt
+    data
+  }
+}`,
+  },
+  createProperty: {
+    label: "Crear Propiedad",
+    description: "Crea una nueva propiedad para usar en claims",
+    query: `mutation CreateProperty {
+  tablesCreateRow(
+    databaseId: "${DB_ID}"
+    tableId: "entities"
+    rowId: "unique()"
+    data: "{\\"type\\":\\"property\\",\\"label\\":\\"Nueva Propiedad\\",\\"description\\":\\"Describe esta propiedad\\",\\"datatype\\":\\"string\\",\\"aliases\\":[],\\"sitelinks\\":{}}"
+  ) {
+    _id
+    _createdAt
+    _updatedAt
+    data
+  }
+}`,
+  },
+  createClaim: {
+    label: "Crear Claim",
+    description: "Añade una declaración a una entidad (reemplaza IDs)",
+    query: `mutation CreateClaim {
+  tablesCreateRow(
+    databaseId: "${DB_ID}"
+    tableId: "claims"
+    rowId: "unique()"
+    data: "{\\"subject\\":\\"<ENTITY_ID>\\",\\"property\\":\\"<PROPERTY_ID>\\",\\"value\\":\\"Valor del claim\\",\\"rank\\":\\"normal\\"}"
+  ) {
+    _id
+    _createdAt
+    _updatedAt
+    data
+  }
+}`,
+  },
+  createQualifier: {
+    label: "Crear Qualifier",
+    description: "Añade un calificador a un claim (reemplaza IDs)",
+    query: `mutation CreateQualifier {
+  tablesCreateRow(
+    databaseId: "${DB_ID}"
+    tableId: "qualifiers"
+    rowId: "unique()"
+    data: "{\\"claim\\":\\"<CLAIM_ID>\\",\\"property\\":\\"<PROPERTY_ID>\\",\\"value\\":\\"Valor del qualifier\\"}"
+  ) {
+    _id
+    _createdAt
+    _updatedAt
+    data
+  }
+}`,
+  },
+  createReference: {
+    label: "Crear Referencia",
+    description: "Añade una referencia/fuente a un claim (reemplaza IDs)",
+    query: `mutation CreateReference {
+  tablesCreateRow(
+    databaseId: "${DB_ID}"
+    tableId: "references"
+    rowId: "unique()"
+    data: "{\\"claim\\":\\"<CLAIM_ID>\\",\\"property\\":\\"<PROPERTY_ID>\\",\\"value\\":\\"https://example.com/source\\"}"
+  ) {
+    _id
+    _createdAt
+    _updatedAt
+    data
+  }
+}`,
+  },
+  updateEntity: {
+    label: "Actualizar Entidad",
+    description: "Actualiza los datos de una entidad existente",
+    query: `mutation UpdateEntity {
+  tablesDBUpdateRow(
+    databaseId: "${DB_ID}"
+    tableId: "entities"
+    rowId: "<ENTITY_ID>"
+    data: "{\\"label\\":\\"Nombre actualizado\\",\\"description\\":\\"Nueva descripción\\"}"
+  ) {
+    _id
+    _updatedAt
+    data
+  }
+}`,
+  },
+  deleteRow: {
+    label: "Eliminar Registro",
+    description: "Elimina un registro por su ID (¡cuidado!)",
+    query: `mutation DeleteRow {
+  tablesDBDeleteRow(
+    databaseId: "${DB_ID}"
+    tableId: "entities"
+    rowId: "<ROW_ID>"
+  ) {
+    status
+  }
+}`,
+  },
+};
+
+// Tipos de datos para propiedades
+const PROPERTY_DATATYPES = [
+  { id: "string", label: "Texto", icon: "📝" },
+  { id: "entity", label: "Entidad", icon: "🔗" },
+  { id: "url", label: "URL", icon: "🌐" },
+  { id: "datetime", label: "Fecha/Hora", icon: "📅" },
+  { id: "quantity", label: "Cantidad", icon: "🔢" },
+  { id: "coordinates", label: "Coordenadas", icon: "📍" },
+  { id: "media", label: "Archivo", icon: "📎" },
+];
+
+// Tablas disponibles
+const TABLES = [
+  { id: "entities", label: "Entidades", icon: "📦" },
+  { id: "claims", label: "Claims", icon: "📋" },
+  { id: "qualifiers", label: "Qualifiers", icon: "🏷️" },
+  { id: "references", label: "Referencias", icon: "📚" },
+];
+
 // Formatos de exportación
 const EXPORT_FORMATS = [
   { id: "json", label: "JSON", icon: "📄" },
@@ -191,6 +328,13 @@ export default function GraphQLPage() {
   const [showVariables, setShowVariables] = useState(false);
   const [executionTime, setExecutionTime] = useState(null);
   const [showExamples, setShowExamples] = useState(true);
+  const [queryType, setQueryType] = useState("query"); // "query" | "mutation"
+  const [showCrudModal, setShowCrudModal] = useState(false);
+  const [crudMode, setCrudMode] = useState("create"); // "create" | "update" | "delete"
+  const [crudTable, setCrudTable] = useState("entities");
+  const [crudData, setCrudData] = useState({});
+  const [crudRowId, setCrudRowId] = useState("");
+  const [crudSuccess, setCrudSuccess] = useState(null);
   const queryRef = useRef(null);
 
   async function executeQuery() {
@@ -233,10 +377,12 @@ export default function GraphQLPage() {
     }
   }
 
-  function loadExample(exampleKey) {
+  function loadExample(exampleKey, isMutation = false) {
     setActiveExample(exampleKey);
-    const example = EXAMPLE_QUERIES[exampleKey];
+    const examples = isMutation ? MUTATION_EXAMPLES : EXAMPLE_QUERIES;
+    const example = examples[exampleKey];
     setQuery(example.query);
+    setQueryType(isMutation ? "mutation" : "query");
     if (example.variables) {
       setVariables(JSON.stringify(example.variables, null, 2));
       setShowVariables(true);
@@ -245,6 +391,105 @@ export default function GraphQLPage() {
     }
     setResult(null);
     setError(null);
+  }
+
+  // Funciones CRUD visual
+  function openCrudModal(mode, table = "entities") {
+    setCrudMode(mode);
+    setCrudTable(table);
+    setCrudData(getDefaultCrudData(table));
+    setCrudRowId("");
+    setCrudSuccess(null);
+    setShowCrudModal(true);
+  }
+
+  function getDefaultCrudData(table) {
+    switch (table) {
+      case "entities":
+        return { type: "item", label: "", description: "", aliases: [], datatype: "string", sitelinks: {} };
+      case "claims":
+        return { subject: "", property: "", value: "", rank: "normal" };
+      case "qualifiers":
+        return { claim: "", property: "", value: "" };
+      case "references":
+        return { claim: "", property: "", value: "" };
+      default:
+        return {};
+    }
+  }
+
+  async function executeCrud() {
+    setLoading(true);
+    setError(null);
+    setCrudSuccess(null);
+
+    try {
+      let mutation;
+      const dataStr = JSON.stringify(JSON.stringify(crudData));
+
+      if (crudMode === "create") {
+        mutation = `mutation {
+  tablesCreateRow(
+    databaseId: "${DB_ID}"
+    tableId: "${crudTable}"
+    rowId: "unique()"
+    data: ${dataStr}
+  ) {
+    _id
+    _createdAt
+    data
+  }
+}`;
+      } else if (crudMode === "update") {
+        if (!crudRowId) throw new Error("Debes especificar el ID del registro a actualizar");
+        mutation = `mutation {
+  tablesDBUpdateRow(
+    databaseId: "${DB_ID}"
+    tableId: "${crudTable}"
+    rowId: "${crudRowId}"
+    data: ${dataStr}
+  ) {
+    _id
+    _updatedAt
+    data
+  }
+}`;
+      } else if (crudMode === "delete") {
+        if (!crudRowId) throw new Error("Debes especificar el ID del registro a eliminar");
+        mutation = `mutation {
+  tablesDBDeleteRow(
+    databaseId: "${DB_ID}"
+    tableId: "${crudTable}"
+    rowId: "${crudRowId}"
+  ) {
+    status
+  }
+}`;
+      }
+
+      const response = await fetch("/api/graphql", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: mutation }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || data.errors) {
+        throw new Error(data.errors?.[0]?.message || data.error || "Error ejecutando operación");
+      }
+
+      setCrudSuccess(data);
+      setTimeout(() => setShowCrudModal(false), 1500);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function updateCrudField(field, value) {
+    setCrudData(prev => ({ ...prev, [field]: value }));
   }
 
   function handleExport(format) {
@@ -350,25 +595,58 @@ export default function GraphQLPage() {
           <div className={`wdqs-layout ${showExamples ? "" : "collapsed"}`}>
             {showExamples && (
               <aside className="wdqs-sidebar">
-                <h3>📚 Consultas de Ejemplo</h3>
+                <h3>📚 Consultas (Query)</h3>
                 <div className="wdqs-examples-list">
                   {Object.entries(EXAMPLE_QUERIES).map(([key, example]) => (
                     <button
                       key={key}
-                      className={`wdqs-example-item ${activeExample === key ? "active" : ""}`}
-                      onClick={() => loadExample(key)}
+                      className={`wdqs-example-item ${activeExample === key && queryType === "query" ? "active" : ""}`}
+                      onClick={() => loadExample(key, false)}
                     >
                       <span className="example-name">{example.label}</span>
                       <span className="example-desc">{example.description}</span>
                     </button>
                   ))}
                 </div>
+
+                <h3>✏️ Mutaciones (CRUD)</h3>
+                <div className="wdqs-examples-list">
+                  {Object.entries(MUTATION_EXAMPLES).map(([key, example]) => (
+                    <button
+                      key={key}
+                      className={`wdqs-example-item mutation ${activeExample === key && queryType === "mutation" ? "active" : ""}`}
+                      onClick={() => loadExample(key, true)}
+                    >
+                      <span className="example-name">{example.label}</span>
+                      <span className="example-desc">{example.description}</span>
+                    </button>
+                  ))}
+                </div>
+
+                <h3>🛠️ Acciones Rápidas</h3>
+                <div className="wdqs-crud-buttons">
+                  <button className="crud-btn create" onClick={() => openCrudModal("create", "entities")}>
+                    ➕ Nueva Entidad
+                  </button>
+                  <button className="crud-btn create" onClick={() => openCrudModal("create", "claims")}>
+                    ➕ Nuevo Claim
+                  </button>
+                  <button className="crud-btn update" onClick={() => openCrudModal("update", "entities")}>
+                    ✏️ Editar Registro
+                  </button>
+                  <button className="crud-btn delete" onClick={() => openCrudModal("delete", "entities")}>
+                    🗑️ Eliminar Registro
+                  </button>
+                </div>
+
                 <div className="wdqs-help">
                   <h4>💡 Ayuda Rápida</h4>
                   <ul>
                     <li><code>tablesDBListRows</code> - Listar registros</li>
                     <li><code>tablesDBGetRow</code> - Obtener un registro</li>
-                    <li>Usa <code>queries</code> para filtrar</li>
+                    <li><code>tablesCreateRow</code> - Crear registro</li>
+                    <li><code>tablesDBUpdateRow</code> - Actualizar</li>
+                    <li><code>tablesDBDeleteRow</code> - Eliminar</li>
                   </ul>
                 </div>
               </aside>
@@ -534,6 +812,248 @@ export default function GraphQLPage() {
           </div>
         </div>
       </main>
+
+      {/* Modal CRUD */}
+      {showCrudModal && (
+        <div className="crud-modal-overlay" onClick={() => setShowCrudModal(false)}>
+          <div className="crud-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="crud-modal-header">
+              <h2>
+                {crudMode === "create" && "➕ Crear Registro"}
+                {crudMode === "update" && "✏️ Actualizar Registro"}
+                {crudMode === "delete" && "🗑️ Eliminar Registro"}
+              </h2>
+              <button className="crud-close-btn" onClick={() => setShowCrudModal(false)}>✕</button>
+            </div>
+
+            <div className="crud-modal-body">
+              {/* Selector de tabla */}
+              <div className="crud-field">
+                <label>Tabla:</label>
+                <select 
+                  value={crudTable} 
+                  onChange={(e) => {
+                    setCrudTable(e.target.value);
+                    setCrudData(getDefaultCrudData(e.target.value));
+                  }}
+                >
+                  {TABLES.map(t => (
+                    <option key={t.id} value={t.id}>{t.icon} {t.label}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* ID para update/delete */}
+              {(crudMode === "update" || crudMode === "delete") && (
+                <div className="crud-field">
+                  <label>ID del Registro: *</label>
+                  <input
+                    type="text"
+                    value={crudRowId}
+                    onChange={(e) => setCrudRowId(e.target.value)}
+                    placeholder="Ingresa el ID del registro"
+                    required
+                  />
+                </div>
+              )}
+
+              {/* Campos según tabla */}
+              {crudMode !== "delete" && (
+                <>
+                  {crudTable === "entities" && (
+                    <>
+                      <div className="crud-field">
+                        <label>Tipo:</label>
+                        <select value={crudData.type || "item"} onChange={(e) => updateCrudField("type", e.target.value)}>
+                          <option value="item">📦 Ítem</option>
+                          <option value="property">🏷️ Propiedad</option>
+                        </select>
+                      </div>
+                      <div className="crud-field">
+                        <label>Etiqueta (label): *</label>
+                        <input
+                          type="text"
+                          value={crudData.label || ""}
+                          onChange={(e) => updateCrudField("label", e.target.value)}
+                          placeholder="Nombre de la entidad"
+                        />
+                      </div>
+                      <div className="crud-field">
+                        <label>Descripción:</label>
+                        <textarea
+                          value={crudData.description || ""}
+                          onChange={(e) => updateCrudField("description", e.target.value)}
+                          placeholder="Descripción de la entidad"
+                        />
+                      </div>
+                      {crudData.type === "property" && (
+                        <div className="crud-field">
+                          <label>Tipo de dato:</label>
+                          <select value={crudData.datatype || "string"} onChange={(e) => updateCrudField("datatype", e.target.value)}>
+                            {PROPERTY_DATATYPES.map(dt => (
+                              <option key={dt.id} value={dt.id}>{dt.icon} {dt.label}</option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                      <div className="crud-field">
+                        <label>Aliases (separados por coma):</label>
+                        <input
+                          type="text"
+                          value={(crudData.aliases || []).join(", ")}
+                          onChange={(e) => updateCrudField("aliases", e.target.value.split(",").map(s => s.trim()).filter(Boolean))}
+                          placeholder="alias1, alias2, alias3"
+                        />
+                      </div>
+                    </>
+                  )}
+
+                  {crudTable === "claims" && (
+                    <>
+                      <div className="crud-field">
+                        <label>Subject (Entity ID): *</label>
+                        <input
+                          type="text"
+                          value={crudData.subject || ""}
+                          onChange={(e) => updateCrudField("subject", e.target.value)}
+                          placeholder="ID de la entidad sujeto"
+                        />
+                      </div>
+                      <div className="crud-field">
+                        <label>Property (Property ID): *</label>
+                        <input
+                          type="text"
+                          value={crudData.property || ""}
+                          onChange={(e) => updateCrudField("property", e.target.value)}
+                          placeholder="ID de la propiedad"
+                        />
+                      </div>
+                      <div className="crud-field">
+                        <label>Valor: *</label>
+                        <input
+                          type="text"
+                          value={crudData.value || ""}
+                          onChange={(e) => updateCrudField("value", e.target.value)}
+                          placeholder="Valor del claim"
+                        />
+                      </div>
+                      <div className="crud-field">
+                        <label>Rango:</label>
+                        <select value={crudData.rank || "normal"} onChange={(e) => updateCrudField("rank", e.target.value)}>
+                          <option value="preferred">⭐ Preferido</option>
+                          <option value="normal">➖ Normal</option>
+                          <option value="deprecated">⚠️ Obsoleto</option>
+                        </select>
+                      </div>
+                    </>
+                  )}
+
+                  {crudTable === "qualifiers" && (
+                    <>
+                      <div className="crud-field">
+                        <label>Claim ID: *</label>
+                        <input
+                          type="text"
+                          value={crudData.claim || ""}
+                          onChange={(e) => updateCrudField("claim", e.target.value)}
+                          placeholder="ID del claim"
+                        />
+                      </div>
+                      <div className="crud-field">
+                        <label>Property ID: *</label>
+                        <input
+                          type="text"
+                          value={crudData.property || ""}
+                          onChange={(e) => updateCrudField("property", e.target.value)}
+                          placeholder="ID de la propiedad"
+                        />
+                      </div>
+                      <div className="crud-field">
+                        <label>Valor: *</label>
+                        <input
+                          type="text"
+                          value={crudData.value || ""}
+                          onChange={(e) => updateCrudField("value", e.target.value)}
+                          placeholder="Valor del qualifier"
+                        />
+                      </div>
+                    </>
+                  )}
+
+                  {crudTable === "references" && (
+                    <>
+                      <div className="crud-field">
+                        <label>Claim ID: *</label>
+                        <input
+                          type="text"
+                          value={crudData.claim || ""}
+                          onChange={(e) => updateCrudField("claim", e.target.value)}
+                          placeholder="ID del claim"
+                        />
+                      </div>
+                      <div className="crud-field">
+                        <label>Property ID: *</label>
+                        <input
+                          type="text"
+                          value={crudData.property || ""}
+                          onChange={(e) => updateCrudField("property", e.target.value)}
+                          placeholder="ID de la propiedad (ej: URL de referencia)"
+                        />
+                      </div>
+                      <div className="crud-field">
+                        <label>Valor (URL/Fuente): *</label>
+                        <input
+                          type="text"
+                          value={crudData.value || ""}
+                          onChange={(e) => updateCrudField("value", e.target.value)}
+                          placeholder="https://ejemplo.com/fuente"
+                        />
+                      </div>
+                    </>
+                  )}
+                </>
+              )}
+
+              {crudMode === "delete" && (
+                <div className="crud-warning">
+                  ⚠️ <strong>Advertencia:</strong> Esta acción eliminará permanentemente el registro. 
+                  Esta operación no se puede deshacer.
+                </div>
+              )}
+
+              {error && (
+                <div className="crud-error">
+                  ❌ {error}
+                </div>
+              )}
+
+              {crudSuccess && (
+                <div className="crud-success">
+                  ✅ Operación completada exitosamente
+                  <pre>{JSON.stringify(crudSuccess, null, 2)}</pre>
+                </div>
+              )}
+            </div>
+
+            <div className="crud-modal-footer">
+              <button className="crud-cancel-btn" onClick={() => setShowCrudModal(false)}>
+                Cancelar
+              </button>
+              <button 
+                className={`crud-submit-btn ${crudMode}`} 
+                onClick={executeCrud} 
+                disabled={loading}
+              >
+                {loading ? "⏳ Procesando..." : (
+                  crudMode === "create" ? "➕ Crear" :
+                  crudMode === "update" ? "✏️ Actualizar" :
+                  "🗑️ Eliminar"
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <footer className="explorer-footer">
         <p>Graph DB Explorer — GraphQL Query Service</p>
