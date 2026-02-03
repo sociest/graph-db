@@ -50,9 +50,13 @@ export default function ImportPage() {
   const [descriptionColumn, setDescriptionColumn] = useState("");
   const [aliasesColumn, setAliasesColumn] = useState("");
   
-  // Reconciliación
+  // Reconciliación de entidades principales
   const [reconcileResults, setReconcileResults] = useState({});
   const [reconcileProgress, setReconcileProgress] = useState(0);
+  
+  // Reconciliación de relaciones (columnas tipo entity)
+  const [relationReconcile, setRelationReconcile] = useState({});
+  const [reconcileStep, setReconcileStep] = useState("entities"); // "entities" | "relations"
   
   // Importación
   const [importProgress, setImportProgress] = useState(0);
@@ -213,7 +217,9 @@ export default function ImportPage() {
     setCurrentStep(STEPS.RECONCILE);
     setLoading(true);
     setReconcileProgress(0);
+    setReconcileStep("entities");
     
+    // Fase 1: Reconciliar entidades principales
     const results = {};
     const total = rawData.length;
     
@@ -231,9 +237,10 @@ export default function ImportPage() {
             createNew: true,
           };
           
-          // Auto-seleccionar si hay coincidencia exacta
+          // Auto-seleccionar si hay coincidencia exacta (por label o alias)
           const exactMatch = (matches.rows || []).find(
-            (m) => m.label?.toLowerCase() === label.toLowerCase()
+            (m) => m.label?.toLowerCase() === label.toLowerCase() ||
+                   m.aliases?.some(a => a.toLowerCase() === label.toLowerCase())
           );
           if (exactMatch) {
             results[label].selectedMatch = exactMatch;
@@ -248,15 +255,118 @@ export default function ImportPage() {
     }
     
     setReconcileResults(results);
+    
+    // Fase 2: Reconciliar columnas de tipo entity (relaciones)
+    await reconcileRelationColumns();
+    
     setLoading(false);
   }
+  
+  // Reconciliar valores de columnas tipo "entity"
+  async function reconcileRelationColumns() {
+    setReconcileStep("relations");
+    setReconcileProgress(0);
+    
+    // Obtener columnas de tipo entity
+    const entityColumns = Object.entries(columnMapping)
+      .filter(([col, mapping]) => 
+        mapping.enabled && 
+        mapping.dataType === "entity" && 
+        col !== labelColumn && 
+        col !== descriptionColumn && 
+        col !== aliasesColumn
+      )
+      .map(([col]) => col);
+    
+    if (entityColumns.length === 0) {
+      return;
+    }
+    
+    // Recopilar todos los valores únicos de las columnas entity
+    const uniqueValues = new Map(); // Map<columnName, Set<value>>
+    
+    for (const col of entityColumns) {
+      const values = new Set();
+      for (const row of rawData) {
+        const val = String(row[col] || "").trim();
+        if (val) values.add(val);
+      }
+      uniqueValues.set(col, values);
+    }
+    
+    // Reconciliar cada valor único
+    const relationResults = {};
+    let processed = 0;
+    let totalValues = 0;
+    
+    for (const values of uniqueValues.values()) {
+      totalValues += values.size;
+    }
+    
+    for (const [col, values] of uniqueValues.entries()) {
+      relationResults[col] = {};
+      
+      for (const value of values) {
+        try {
+          const matches = await searchEntities(value, 5);
+          const matchList = matches.rows || [];
+          
+          // Auto-seleccionar coincidencia exacta (por label o alias)
+          const exactMatch = matchList.find(
+            (m) => m.label?.toLowerCase() === value.toLowerCase() ||
+                   m.aliases?.some(a => a.toLowerCase() === value.toLowerCase())
+          );
+          
+          relationResults[col][value] = {
+            value,
+            matches: matchList,
+            selectedMatch: exactMatch || null,
+            createNew: !exactMatch,
+            skip: false,
+          };
+        } catch (err) {
+          relationResults[col][value] = {
+            value,
+            matches: [],
+            selectedMatch: null,
+            createNew: true,
+            skip: false,
+          };
+        }
+        
+        processed++;
+        setReconcileProgress(Math.round((processed / totalValues) * 100));
+      }
+    }
+    
+    setRelationReconcile(relationResults);
+  }
 
-  // Actualizar resultado de reconciliación
+  // Actualizar resultado de reconciliación de entidades
   function updateReconcileResult(label, updates) {
     setReconcileResults((prev) => ({
       ...prev,
       [label]: { ...prev[label], ...updates },
     }));
+  }
+  
+  // Actualizar resultado de reconciliación de relaciones
+  function updateRelationReconcile(column, value, updates) {
+    setRelationReconcile((prev) => ({
+      ...prev,
+      [column]: {
+        ...prev[column],
+        [value]: { ...prev[column]?.[value], ...updates },
+      },
+    }));
+  }
+  
+  // Obtener el ID de entidad para un valor de relación
+  function getRelationEntityId(column, value) {
+    const info = relationReconcile[column]?.[value];
+    if (!info || info.skip) return null;
+    if (info.selectedMatch) return info.selectedMatch.$id;
+    return null; // Si createNew es true, se creará durante la importación
   }
 
   // Proceso de importación
@@ -265,9 +375,12 @@ export default function ImportPage() {
     setIsImporting(true);
     setImportProgress(0);
     
-    const results = { created: 0, updated: 0, claims: 0, errors: [] };
+    const results = { created: 0, updated: 0, claims: 0, relationsCreated: 0, errors: [] };
     const total = rawData.length;
     const teamId = activeTeam?.$id || null;
+    
+    // Mapa para guardar entidades de relación creadas durante la importación
+    const createdRelationEntities = {}; // { "column:value": entityId }
     
     // Primero crear las propiedades necesarias
     const propertyMap = {};
@@ -289,6 +402,25 @@ export default function ImportPage() {
         }
       } else if (mapping.propertyId) {
         propertyMap[column] = mapping.propertyId;
+      }
+    }
+    
+    // Crear entidades de relación que deben crearse (createNew = true)
+    for (const [column, values] of Object.entries(relationReconcile)) {
+      for (const [value, info] of Object.entries(values)) {
+        if (info.createNew && !info.skip && !info.selectedMatch) {
+          try {
+            const entity = await createEntity({
+              label: value,
+              description: null,
+              aliases: [],
+            }, teamId);
+            createdRelationEntities[`${column}:${value}`] = entity.$id;
+            results.relationsCreated++;
+          } catch (err) {
+            results.errors.push(`Error creando entidad de relación "${value}": ${err.message}`);
+          }
+        }
       }
     }
     
@@ -337,11 +469,32 @@ export default function ImportPage() {
           if (!propertyId) continue;
           
           try {
+            let claimValue;
+            
+            // Para columnas tipo entity, obtener el ID de la entidad relacionada
+            if (mapping.dataType === "entity") {
+              const valueStr = String(value).trim();
+              const relationInfo = relationReconcile[column]?.[valueStr];
+              
+              if (relationInfo?.skip) {
+                continue; // Saltar este claim
+              } else if (relationInfo?.selectedMatch) {
+                claimValue = relationInfo.selectedMatch.$id;
+              } else if (createdRelationEntities[`${column}:${valueStr}`]) {
+                claimValue = createdRelationEntities[`${column}:${valueStr}`];
+              } else {
+                // No hay entidad, saltar
+                continue;
+              }
+            } else {
+              claimValue = formatValue(value, mapping.dataType);
+            }
+            
             const claimData = {
               subject: entityId,
               property: propertyId,
               datatype: mapping.dataType,
-              value: formatValue(value, mapping.dataType),
+              value: claimValue,
             };
             
             await createClaim(claimData, teamId);
@@ -397,9 +550,11 @@ export default function ImportPage() {
     setDescriptionColumn("");
     setAliasesColumn("");
     setReconcileResults({});
+    setRelationReconcile({});
+    setReconcileStep("entities");
     setReconcileProgress(0);
     setImportProgress(0);
-    setImportResults({ created: 0, updated: 0, errors: [] });
+    setImportResults({ created: 0, updated: 0, relationsCreated: 0, claims: 0, errors: [] });
     setError(null);
   }
 
@@ -639,30 +794,171 @@ export default function ImportPage() {
                 </div>
               ) : (
                 <>
-                  <div className="reconcile-stats">
-                    <div className="stat">
-                      <span className="stat-value">
-                        {Object.values(reconcileResults).filter((r) => r.createNew).length}
-                      </span>
-                      <span className="stat-label">Nuevas entidades</span>
+                  {/* Tabs para cambiar entre entidades y relaciones */}
+                  {Object.keys(relationReconcile).length > 0 && (
+                    <div className="reconcile-tabs">
+                      <button
+                        className={`reconcile-tab ${reconcileStep === "entities" ? "active" : ""}`}
+                        onClick={() => setReconcileStep("entities")}
+                      >
+                        Entidades Principales ({Object.keys(reconcileResults).length})
+                      </button>
+                      <button
+                        className={`reconcile-tab ${reconcileStep === "relations" ? "active" : ""}`}
+                        onClick={() => setReconcileStep("relations")}
+                      >
+                        Relaciones ({Object.values(relationReconcile).reduce((acc, col) => acc + Object.keys(col).length, 0)})
+                      </button>
                     </div>
-                    <div className="stat">
-                      <span className="stat-value">
-                        {Object.values(reconcileResults).filter((r) => !r.createNew && r.selectedMatch).length}
-                      </span>
-                      <span className="stat-label">Coincidencias encontradas</span>
-                    </div>
-                  </div>
+                  )}
 
-                  <div className="reconcile-list">
-                    {Object.entries(reconcileResults).map(([label, result]) => (
-                      <ReconcileRow
-                        key={label}
-                        result={result}
-                        onUpdate={(updates) => updateReconcileResult(label, updates)}
-                      />
-                    ))}
-                  </div>
+                  {/* Sección de entidades principales */}
+                  {reconcileStep === "entities" && (
+                    <>
+                      <div className="reconcile-stats">
+                        <div className="stat">
+                          <span className="stat-value">
+                            {Object.values(reconcileResults).filter((r) => r.createNew).length}
+                          </span>
+                          <span className="stat-label">Nuevas entidades</span>
+                        </div>
+                        <div className="stat">
+                          <span className="stat-value">
+                            {Object.values(reconcileResults).filter((r) => !r.createNew && r.selectedMatch).length}
+                          </span>
+                          <span className="stat-label">Coincidencias encontradas</span>
+                        </div>
+                      </div>
+
+                      <div className="reconcile-list">
+                        {Object.entries(reconcileResults).map(([label, result]) => (
+                          <ReconcileRow
+                            key={label}
+                            result={result}
+                            onUpdate={(updates) => updateReconcileResult(label, updates)}
+                          />
+                        ))}
+                      </div>
+                    </>
+                  )}
+
+                  {/* Sección de reconciliación de relaciones */}
+                  {reconcileStep === "relations" && (
+                    <>
+                      <div className="reconcile-stats">
+                        <div className="stat">
+                          <span className="stat-value">
+                            {Object.values(relationReconcile).reduce(
+                              (acc, col) => acc + Object.values(col).filter((r) => r.createNew).length,
+                              0
+                            )}
+                          </span>
+                          <span className="stat-label">Nuevas entidades</span>
+                        </div>
+                        <div className="stat">
+                          <span className="stat-value">
+                            {Object.values(relationReconcile).reduce(
+                              (acc, col) => acc + Object.values(col).filter((r) => r.selectedMatch).length,
+                              0
+                            )}
+                          </span>
+                          <span className="stat-label">Coincidencias</span>
+                        </div>
+                        <div className="stat">
+                          <span className="stat-value">
+                            {Object.values(relationReconcile).reduce(
+                              (acc, col) => acc + Object.values(col).filter((r) => r.skip).length,
+                              0
+                            )}
+                          </span>
+                          <span className="stat-label">Omitidas</span>
+                        </div>
+                      </div>
+
+                      <div className="relation-reconcile-sections">
+                        {Object.entries(relationReconcile).map(([column, values]) => (
+                          <div key={column} className="relation-column-section">
+                            <h3 className="relation-column-title">
+                              Columna: <strong>{column}</strong>
+                              <span className="relation-column-count">
+                                ({Object.keys(values).length} valores únicos)
+                              </span>
+                            </h3>
+                            <div className="reconcile-list">
+                              {Object.entries(values).map(([value, info]) => (
+                                <div key={value} className="reconcile-row relation-reconcile-row">
+                                  <div className="reconcile-label">
+                                    <span className="label-text">{value}</span>
+                                    <span className="occurrences">
+                                      {rawData.filter(row => String(row[column]).trim() === value).length} ocurrencias
+                                    </span>
+                                  </div>
+                                  
+                                  <div className="reconcile-actions">
+                                    {info.matches && info.matches.length > 0 ? (
+                                      <select
+                                        className="match-select"
+                                        value={info.skip ? "skip" : (info.createNew ? "new" : (info.selectedMatch?.$id || ""))}
+                                        onChange={(e) => {
+                                          const val = e.target.value;
+                                          if (val === "skip") {
+                                            updateRelationReconcile(column, value, { skip: true, createNew: false, selectedMatch: null });
+                                          } else if (val === "new") {
+                                            updateRelationReconcile(column, value, { createNew: true, skip: false, selectedMatch: null });
+                                          } else {
+                                            const match = info.matches.find((m) => m.$id === val);
+                                            updateRelationReconcile(column, value, { selectedMatch: match, createNew: false, skip: false });
+                                          }
+                                        }}
+                                      >
+                                        {info.matches.map((match) => (
+                                          <option key={match.$id} value={match.$id}>
+                                            {match.label}
+                                            {match.aliases?.length > 0 && ` (alias: ${match.aliases.slice(0, 2).join(", ")})`}
+                                          </option>
+                                        ))}
+                                        <option value="new">✚ Crear nueva entidad</option>
+                                        <option value="skip">⊘ Omitir</option>
+                                      </select>
+                                    ) : (
+                                      <div className="no-match-actions">
+                                        <label className="radio-option">
+                                          <input
+                                            type="radio"
+                                            checked={info.createNew && !info.skip}
+                                            onChange={() => updateRelationReconcile(column, value, { createNew: true, skip: false })}
+                                          />
+                                          <span>Crear nueva</span>
+                                        </label>
+                                        <label className="radio-option">
+                                          <input
+                                            type="radio"
+                                            checked={info.skip}
+                                            onChange={() => updateRelationReconcile(column, value, { skip: true, createNew: false })}
+                                          />
+                                          <span>Omitir</span>
+                                        </label>
+                                      </div>
+                                    )}
+                                    
+                                    {info.selectedMatch && (
+                                      <span className="match-badge">✓ {info.selectedMatch.label}</span>
+                                    )}
+                                    {info.createNew && !info.skip && (
+                                      <span className="create-badge">✚ Nueva</span>
+                                    )}
+                                    {info.skip && (
+                                      <span className="skip-badge">⊘ Omitir</span>
+                                    )}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
 
                   <div className="step-actions">
                     <button className="btn btn-secondary" onClick={() => setCurrentStep(STEPS.MAPPING)}>
@@ -711,6 +1007,12 @@ export default function ImportPage() {
                   <span className="stat-value info">{importResults.updated}</span>
                   <span className="stat-label">Entidades actualizadas</span>
                 </div>
+                {importResults.relationsCreated > 0 && (
+                  <div className="summary-stat">
+                    <span className="stat-value info">{importResults.relationsCreated}</span>
+                    <span className="stat-label">Relaciones creadas</span>
+                  </div>
+                )}
                 <div className="summary-stat">
                   <span className="stat-value">{importResults.claims}</span>
                   <span className="stat-label">Claims creados</span>
@@ -1046,6 +1348,158 @@ export default function ImportPage() {
           max-height: 400px;
           overflow-y: auto;
           margin-bottom: 1.5rem;
+        }
+
+        /* Tabs de reconciliación */
+        .reconcile-tabs {
+          display: flex;
+          gap: 0;
+          margin-bottom: 1.5rem;
+          border-bottom: 2px solid var(--color-border-light, #c8ccd1);
+        }
+
+        .reconcile-tab {
+          padding: 0.75rem 1.5rem;
+          background: none;
+          border: none;
+          border-bottom: 2px solid transparent;
+          margin-bottom: -2px;
+          cursor: pointer;
+          font-size: 0.9375rem;
+          color: var(--color-text-secondary, #54595d);
+          transition: all 0.2s;
+        }
+
+        .reconcile-tab:hover {
+          color: var(--color-text, #202122);
+          background: var(--color-bg-alt, #eaecf0);
+        }
+
+        .reconcile-tab.active {
+          color: var(--color-primary, #0645ad);
+          border-bottom-color: var(--color-primary, #0645ad);
+          font-weight: 600;
+        }
+
+        /* Secciones de relaciones */
+        .relation-reconcile-sections {
+          display: flex;
+          flex-direction: column;
+          gap: 1.5rem;
+        }
+
+        .relation-column-section {
+          border: 1px solid var(--color-border-light, #c8ccd1);
+          border-radius: var(--radius-md, 4px);
+          overflow: hidden;
+        }
+
+        .relation-column-title {
+          margin: 0;
+          padding: 0.75rem 1rem;
+          background: var(--color-bg-alt, #eaecf0);
+          font-size: 0.9375rem;
+          font-weight: 500;
+          border-bottom: 1px solid var(--color-border-light, #c8ccd1);
+        }
+
+        .relation-column-count {
+          font-weight: normal;
+          color: var(--color-text-muted, #72777d);
+          margin-left: 0.5rem;
+        }
+
+        .relation-column-section .reconcile-list {
+          margin: 0;
+          padding: 0.5rem;
+          max-height: 300px;
+        }
+
+        /* Filas de reconciliación de relaciones */
+        .relation-reconcile-row {
+          display: flex;
+          align-items: center;
+          gap: 1rem;
+          padding: 0.75rem 1rem;
+          background: var(--color-bg-card, #ffffff);
+          border: 1px solid var(--color-border-light, #c8ccd1);
+          border-radius: var(--radius-sm, 2px);
+        }
+
+        .relation-reconcile-row .reconcile-label {
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          gap: 0.25rem;
+        }
+
+        .relation-reconcile-row .label-text {
+          font-weight: 500;
+          color: var(--color-text, #202122);
+        }
+
+        .relation-reconcile-row .occurrences {
+          font-size: 0.75rem;
+          color: var(--color-text-muted, #72777d);
+        }
+
+        .reconcile-actions {
+          display: flex;
+          align-items: center;
+          gap: 0.75rem;
+        }
+
+        .match-select {
+          padding: 0.375rem 0.75rem;
+          border: 1px solid var(--color-border-light, #c8ccd1);
+          border-radius: var(--radius-sm, 2px);
+          background: var(--color-bg-card, #ffffff);
+          font-size: 0.875rem;
+          min-width: 200px;
+          max-width: 300px;
+        }
+
+        .no-match-actions {
+          display: flex;
+          gap: 1rem;
+        }
+
+        .radio-option {
+          display: flex;
+          align-items: center;
+          gap: 0.375rem;
+          cursor: pointer;
+          font-size: 0.875rem;
+          color: var(--color-text-secondary, #54595d);
+        }
+
+        .radio-option input {
+          margin: 0;
+        }
+
+        .match-badge,
+        .create-badge,
+        .skip-badge {
+          padding: 0.25rem 0.5rem;
+          border-radius: var(--radius-sm, 2px);
+          font-size: 0.75rem;
+          font-weight: 600;
+          white-space: nowrap;
+        }
+
+        .match-badge {
+          background: rgba(6, 69, 173, 0.1);
+          color: var(--color-primary, #0645ad);
+        }
+
+        .create-badge {
+          background: var(--color-success, #14866d);
+          color: white;
+        }
+
+        .skip-badge {
+          background: var(--color-bg-alt, #eaecf0);
+          color: var(--color-text-muted, #72777d);
         }
 
         .complete-header {
