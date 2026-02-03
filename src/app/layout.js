@@ -1,3 +1,5 @@
+import Providers from "./providers";
+
 export const metadata = {
   title: "Graph DB Explorer",
   description: "Explorador de entidades estilo Wikidata",
@@ -16,7 +18,7 @@ export default function RootLayout({ children }) {
         />
       </head>
       <body className={"bg-[#f8f9fa] font-[Inter] text-sm text-[#202122]"}>
-        {children}
+        <Providers>{children}</Providers>
       </body>
     </html>
   );

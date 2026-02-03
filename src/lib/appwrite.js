@@ -1,4 +1,4 @@
-import { Client, Account, TablesDB, Query } from "appwrite";
+import { Client, Account, TablesDB, Query, Teams, Graphql } from "appwrite";
 
 const client = new Client()
   .setEndpoint(process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT)
@@ -6,5 +6,7 @@ const client = new Client()
 
 const account = new Account(client);
 const tablesDB = new TablesDB(client);
+const teams = new Teams(client);
+const graphql = new Graphql(client);
 
-export { client, account, tablesDB, Query };
+export { client, account, tablesDB, Query, teams, graphql };

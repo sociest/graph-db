@@ -1,34 +1,54 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
+import UserMenu from "./UserMenu";
+import AuthModal from "./AuthModal";
 
 /**
  * Navegación principal del explorador
  */
 export default function Navigation() {
-  return (
-    <nav className="main-nav">
-      <div className="nav-container">
-        <Link href="/" className="nav-logo">
-          <span className="icon-database logo-icon"></span>
-          <span className="logo-text">Graph DB</span>
-        </Link>
+  const [showAuthModal, setShowAuthModal] = useState(false);
 
-        <div className="nav-links">
-          <Link href="/" className="nav-link">
-            <span className="icon-home"></span>
-            <span>Inicio</span>
+  return (
+    <>
+      <nav className="main-nav">
+        <div className="nav-container">
+          <Link href="/" className="nav-logo">
+            <span className="icon-database logo-icon"></span>
+            <span className="logo-text">Graph DB</span>
           </Link>
-          <Link href="/entities" className="nav-link">
-            <span className="icon-list"></span>
-            <span>Entidades</span>
-          </Link>
-          <Link href="/search" className="nav-link">
-            <span className="icon-search"></span>
-            <span>Buscar</span>
-          </Link>
+
+          <div className="nav-links">
+            <Link href="/" className="nav-link">
+              <span className="icon-home"></span>
+              <span>Inicio</span>
+            </Link>
+            <Link href="/entities" className="nav-link">
+              <span className="icon-list"></span>
+              <span>Entidades</span>
+            </Link>
+            <Link href="/search" className="nav-link">
+              <span className="icon-search"></span>
+              <span>Buscar</span>
+            </Link>
+            <Link href="/graphql" className="nav-link">
+              <span className="icon-code"></span>
+              <span>GraphQL</span>
+            </Link>
+          </div>
+
+          <div className="nav-user">
+            <UserMenu onLoginClick={() => setShowAuthModal(true)} />
+          </div>
         </div>
-      </div>
-    </nav>
+      </nav>
+
+      <AuthModal
+        isOpen={showAuthModal}
+        onClose={() => setShowAuthModal(false)}
+      />
+    </>
   );
 }
