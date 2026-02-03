@@ -16,7 +16,8 @@ import {
 const AuthContext = createContext(null);
 
 // ID del Main Team (equipo de administradores)
-const MAIN_TEAM_ID = process.env.NEXT_PUBLIC_MAIN_TEAM_ID || "main";
+// Si no está configurado, usará el primer team del usuario como Main Team
+const MAIN_TEAM_ID = process.env.NEXT_PUBLIC_MAIN_TEAM_ID;
 
 // Roles de equipo que tienen permisos de edición
 const EDITOR_ROLES = ["owner", "admin", "editor", "member"];
@@ -30,6 +31,7 @@ export function AuthProvider({ children }) {
   const [activeTeam, setActiveTeam] = useState(null);
   const [loading, setLoading] = useState(true);
   const [authEnabled] = useState(isAuthEnabled());
+  const [mainTeamId, setMainTeamId] = useState(MAIN_TEAM_ID);
 
   // Cargar team activo desde localStorage
   useEffect(() => {
@@ -55,23 +57,27 @@ export function AuthProvider({ children }) {
   async function checkUser() {
     try {
       const currentUser = await getCurrentUser();
+      console.log("[Auth] Current user:", currentUser);
       setUser(currentUser);
 
       if (currentUser) {
-        const teams = await getUserTeams();
-        setUserTeams(teams);
+        const teamsData = await getUserTeams();
+        console.log("[Auth] User teams with roles:", teamsData);
+        setUserTeams(teamsData);
 
         // Obtener todos los teams disponibles
         const available = await getAllTeams();
         setAllTeams(available);
 
         // Si no hay team activo, usar el primero o el Main Team
-        if (!activeTeam && teams.length > 0) {
-          const mainTeam = teams.find((t) => t.$id === MAIN_TEAM_ID);
-          setActiveTeam(mainTeam || teams[0]);
+        if (!activeTeam && teamsData.length > 0) {
+          const mainTeam = teamsData.find((t) => t.$id === MAIN_TEAM_ID);
+          console.log("[Auth] Main team ID:", MAIN_TEAM_ID, "Found:", mainTeam);
+          setActiveTeam(mainTeam || teamsData[0]);
         }
       }
     } catch (error) {
+      console.error("[Auth] Error checking user:", error);
       setUser(null);
       setUserTeams([]);
       setAllTeams([]);
@@ -138,7 +144,7 @@ export function AuthProvider({ children }) {
     }
   }, [activeTeam, userTeams]);
 
-  // Calcular permisos basados en el team activo
+  // Calcular permisos basados en las membresías del usuario
   const permissions = useMemo(() => {
     // Si la autenticación no está habilitada, permitir todo
     if (!authEnabled) {
@@ -167,38 +173,78 @@ export function AuthProvider({ children }) {
     }
 
     // Verificar si es miembro del Main Team
-    const isMainTeamMember = userTeams.some((t) => t.$id === MAIN_TEAM_ID);
+    // Si MAIN_TEAM_ID no está configurado, el primer team del usuario se considera el Main Team
+    const effectiveMainTeamId = MAIN_TEAM_ID || (userTeams.length > 0 ? userTeams[0].$id : null);
+    const mainTeam = effectiveMainTeamId 
+      ? userTeams.find((t) => t.$id === effectiveMainTeamId)
+      : null;
+    const isMainTeamMember = !!mainTeam;
 
-    // Obtener roles del usuario en el team activo
-    const userRoles = [];
-    if (activeTeam) {
-      if (activeTeam.roles) {
-        userRoles.push(...activeTeam.roles);
+    // Actualizar el mainTeamId en el estado si no está configurado
+    if (!MAIN_TEAM_ID && effectiveMainTeamId) {
+      console.log("[Auth] No MAIN_TEAM_ID configurado. Usando el primer team como Main Team:", effectiveMainTeamId);
+    }
+
+    // Recopilar todos los roles del usuario en todos sus teams
+    const allUserRoles = [];
+    for (const team of userTeams) {
+      if (team.roles && team.roles.length > 0) {
+        allUserRoles.push(...team.roles);
       }
     }
 
-    // Verificar si tiene rol de editor en el team activo
-    const hasEditorRole = userRoles.some((role) => 
+    console.log("[Auth] Teams del usuario:", userTeams.map(t => ({
+      id: t.$id,
+      name: t.name,
+      roles: t.roles
+    })));
+    console.log("[Auth] Main Team ID efectivo:", effectiveMainTeamId);
+    console.log("[Auth] Todos los roles del usuario:", allUserRoles);
+
+    // Obtener roles del usuario en el team activo
+    const activeTeamRoles = activeTeam?.roles || [];
+
+    // Verificar si tiene rol de editor en algún team
+    const hasEditorRole = allUserRoles.some((role) => 
       EDITOR_ROLES.includes(role.toLowerCase())
     );
 
-    // Verificar si tiene rol de admin en el team activo
-    const hasAdminRole = userRoles.some((role) => 
+    // Verificar si tiene rol de admin en algún team
+    const hasAdminRole = allUserRoles.some((role) => 
       ADMIN_ROLES.includes(role.toLowerCase())
     );
 
-    // Los miembros del Main Team siempre tienen permisos de admin
+    // Si es miembro de un team (cualquier rol), tiene permisos de edición
+    const isMemberOfAnyTeam = userTeams.length > 0;
+
+    // Los miembros del Main Team O usuarios con rol admin en cualquier team son administradores
     const isAdminUser = isMainTeamMember || hasAdminRole;
 
-    return {
+    // Si es miembro de cualquier team, tiene permisos de edición
+    const hasEditPermission = isMemberOfAnyTeam;
+
+    const result = {
       canView: true,
-      canEdit: isMainTeamMember || hasEditorRole || hasAdminRole,
-      canDelete: isMainTeamMember || hasEditorRole || hasAdminRole,
-      canCreate: isMainTeamMember || hasEditorRole || hasAdminRole,
+      canEdit: hasEditPermission,
+      canDelete: hasEditPermission,
+      canCreate: hasEditPermission,
       isAdmin: isAdminUser,
       isMainTeamMember,
-      roles: [...new Set(userRoles)],
+      roles: [...new Set(allUserRoles)],
+      activeTeamRoles: [...new Set(activeTeamRoles)],
     };
+
+    console.log("[Auth] Permisos calculados:", {
+      isMainTeamMember,
+      hasEditorRole,
+      hasAdminRole,
+      isMemberOfAnyTeam,
+      isAdminUser,
+      canEdit: hasEditPermission,
+      result,
+    });
+
+    return result;
   }, [authEnabled, user, userTeams, activeTeam]);
 
   const value = {

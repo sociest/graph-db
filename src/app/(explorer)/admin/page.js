@@ -53,10 +53,26 @@ export default function AdminPage() {
   const [filterAction, setFilterAction] = useState("");
   const [filterEntityType, setFilterEntityType] = useState("");
 
+  // Debug log
+  useEffect(() => {
+    console.log("[AdminPage] Auth state:", {
+      authLoading,
+      authEnabled,
+      isAuthenticated,
+      isAdmin,
+      isMainTeamMember,
+      userTeams: userTeams?.length,
+      activeTeam: activeTeam?.name,
+      mainTeamId,
+      permissions
+    });
+  }, [authLoading, authEnabled, isAuthenticated, isAdmin, isMainTeamMember, userTeams, activeTeam, mainTeamId, permissions]);
+
   useEffect(() => {
     if (!authLoading) {
       // Si la autenticación está habilitada y el usuario no es admin, redirigir
       if (authEnabled && !isAdmin) {
+        console.log("[AdminPage] Redirigiendo porque no es admin. isAdmin:", isAdmin);
         router.push("/");
         return;
       }

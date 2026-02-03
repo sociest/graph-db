@@ -57,12 +57,53 @@ export async function getCurrentUser() {
 }
 
 /**
- * Obtiene los teams del usuario actual (donde es miembro)
+ * Obtiene los teams del usuario actual con sus roles (membresías)
+ * Retorna los teams enriquecidos con la información de la membresía del usuario
  */
 export async function getUserTeams() {
   try {
+    const user = await getCurrentUser();
+    console.log("[Auth/getUserTeams] User:", user?.$id);
+    if (!user) return [];
+
     const result = await teams.list();
-    return result.teams || [];
+    console.log("[Auth/getUserTeams] Teams list:", result.teams?.length);
+    const teamsWithRoles = [];
+
+    // Para cada team, obtener la membresía del usuario para conocer sus roles
+    for (const team of result.teams || []) {
+      try {
+        const memberships = await teams.listMemberships({ teamId: team.$id });
+        console.log(`[Auth/getUserTeams] Team ${team.$id} memberships:`, memberships.memberships?.length);
+        
+        // Buscar la membresía del usuario actual
+        const userMembership = memberships.memberships?.find(
+          (m) => m.userId === user.$id
+        );
+        console.log(`[Auth/getUserTeams] User membership in ${team.$id}:`, userMembership?.roles);
+        
+        teamsWithRoles.push({
+          ...team,
+          // Incluir la información de la membresía
+          membership: userMembership || null,
+          roles: userMembership?.roles || [],
+          membershipId: userMembership?.$id || null,
+          confirm: userMembership?.confirm || false,
+        });
+      } catch (err) {
+        // Si no podemos obtener las membresías, añadir el team sin roles
+        console.error(`Error getting memberships for team ${team.$id}:`, err);
+        teamsWithRoles.push({
+          ...team,
+          membership: null,
+          roles: [],
+          membershipId: null,
+          confirm: false,
+        });
+      }
+    }
+
+    return teamsWithRoles;
   } catch (error) {
     console.error("Error getting user teams:", error);
     return [];
