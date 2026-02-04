@@ -143,6 +143,10 @@ export default function ImportPage() {
   const [relationReconcile, setRelationReconcile] = useState({});
   const [reconcileStep, setReconcileStep] = useState("entities"); // "entities" | "relations"
   
+  // Paginación de reconciliación de entidades
+  const [entitiesPage, setEntitiesPage] = useState(1);
+  const [entitiesPerPage, setEntitiesPerPage] = useState(10);
+  
   // Claims/Qualifiers/References estáticos (se aplican a todas las entidades)
   const [staticClaims, setStaticClaims] = useState([]);
   // Cada staticClaim: { id, propertyId, propertyLabel, dataType, value, createProperty }
@@ -417,6 +421,7 @@ export default function ImportPage() {
     setLoading(true);
     setReconcileProgress(0);
     setReconcileStep("entities");
+    setEntitiesPage(1); // Resetear paginación
     
     // Fase 1: Reconciliar entidades principales
     // Extraer labels únicos primero
@@ -1330,15 +1335,122 @@ export default function ImportPage() {
                         </div>
                       </div>
 
-                      <div className="reconcile-list">
-                        {Object.entries(reconcileResults).map(([label, result]) => (
-                          <ReconcileRow
-                            key={label}
-                            result={result}
-                            onUpdate={(updates) => updateReconcileResult(label, updates)}
-                          />
-                        ))}
-                      </div>
+                      {/* Paginación de entidades */}
+                      {(() => {
+                        const allEntries = Object.entries(reconcileResults);
+                        const totalEntities = allEntries.length;
+                        const totalPages = Math.ceil(totalEntities / entitiesPerPage);
+                        const startIdx = (entitiesPage - 1) * entitiesPerPage;
+                        const paginatedEntries = allEntries.slice(startIdx, startIdx + entitiesPerPage);
+                        
+                        return (
+                          <>
+                            <div className="pagination-controls">
+                              <div className="pagination-info">
+                                Mostrando {startIdx + 1}-{Math.min(startIdx + entitiesPerPage, totalEntities)} de {totalEntities} entidades
+                              </div>
+                              <div className="pagination-actions">
+                                <label className="per-page-selector">
+                                  Por página:
+                                  <select
+                                    value={entitiesPerPage}
+                                    onChange={(e) => {
+                                      setEntitiesPerPage(Number(e.target.value));
+                                      setEntitiesPage(1);
+                                    }}
+                                  >
+                                    <option value={10}>10</option>
+                                    <option value={15}>15</option>
+                                    <option value={20}>20</option>
+                                    <option value={25}>25</option>
+                                  </select>
+                                </label>
+                                <div className="page-buttons">
+                                  <button
+                                    className="btn btn-sm"
+                                    onClick={() => setEntitiesPage(1)}
+                                    disabled={entitiesPage === 1}
+                                  >
+                                    «
+                                  </button>
+                                  <button
+                                    className="btn btn-sm"
+                                    onClick={() => setEntitiesPage((p) => Math.max(1, p - 1))}
+                                    disabled={entitiesPage === 1}
+                                  >
+                                    ‹
+                                  </button>
+                                  <span className="page-indicator">
+                                    Página {entitiesPage} de {totalPages || 1}
+                                  </span>
+                                  <button
+                                    className="btn btn-sm"
+                                    onClick={() => setEntitiesPage((p) => Math.min(totalPages, p + 1))}
+                                    disabled={entitiesPage >= totalPages}
+                                  >
+                                    ›
+                                  </button>
+                                  <button
+                                    className="btn btn-sm"
+                                    onClick={() => setEntitiesPage(totalPages)}
+                                    disabled={entitiesPage >= totalPages}
+                                  >
+                                    »
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="reconcile-list">
+                              {paginatedEntries.map(([label, result]) => (
+                                <ReconcileRow
+                                  key={label}
+                                  result={result}
+                                  onUpdate={(updates) => updateReconcileResult(label, updates)}
+                                />
+                              ))}
+                            </div>
+
+                            {totalPages > 1 && (
+                              <div className="pagination-controls pagination-bottom">
+                                <div className="page-buttons">
+                                  <button
+                                    className="btn btn-sm"
+                                    onClick={() => setEntitiesPage(1)}
+                                    disabled={entitiesPage === 1}
+                                  >
+                                    «
+                                  </button>
+                                  <button
+                                    className="btn btn-sm"
+                                    onClick={() => setEntitiesPage((p) => Math.max(1, p - 1))}
+                                    disabled={entitiesPage === 1}
+                                  >
+                                    ‹
+                                  </button>
+                                  <span className="page-indicator">
+                                    Página {entitiesPage} de {totalPages}
+                                  </span>
+                                  <button
+                                    className="btn btn-sm"
+                                    onClick={() => setEntitiesPage((p) => Math.min(totalPages, p + 1))}
+                                    disabled={entitiesPage >= totalPages}
+                                  >
+                                    ›
+                                  </button>
+                                  <button
+                                    className="btn btn-sm"
+                                    onClick={() => setEntitiesPage(totalPages)}
+                                    disabled={entitiesPage >= totalPages}
+                                  >
+                                    »
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </>
+                        );
+                      })()}
                     </>
                   )}
 
@@ -1997,6 +2109,77 @@ export default function ImportPage() {
           max-height: 400px;
           overflow-y: auto;
           margin-bottom: 1.5rem;
+        }
+
+        /* Paginación */
+        .pagination-controls {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 0.75rem 1rem;
+          background: var(--color-bg, #f8f9fa);
+          border: 1px solid var(--color-border-light, #c8ccd1);
+          border-radius: var(--radius-md, 4px);
+          margin-bottom: 1rem;
+          flex-wrap: wrap;
+          gap: 0.75rem;
+        }
+
+        .pagination-controls.pagination-bottom {
+          margin-top: 1rem;
+          margin-bottom: 0;
+          justify-content: center;
+        }
+
+        .pagination-info {
+          font-size: 0.875rem;
+          color: var(--color-text-secondary, #54595d);
+        }
+
+        .pagination-actions {
+          display: flex;
+          align-items: center;
+          gap: 1rem;
+        }
+
+        .per-page-selector {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          font-size: 0.875rem;
+          color: var(--color-text-secondary, #54595d);
+        }
+
+        .per-page-selector select {
+          padding: 0.375rem 0.5rem;
+          border: 1px solid var(--color-border-light, #c8ccd1);
+          border-radius: var(--radius-sm, 2px);
+          background: var(--color-bg-card, #ffffff);
+          font-size: 0.875rem;
+        }
+
+        .page-buttons {
+          display: flex;
+          align-items: center;
+          gap: 0.25rem;
+        }
+
+        .page-indicator {
+          padding: 0 0.75rem;
+          font-size: 0.875rem;
+          color: var(--color-text, #202122);
+          white-space: nowrap;
+        }
+
+        .btn-sm {
+          padding: 0.375rem 0.625rem;
+          font-size: 0.875rem;
+          min-width: 32px;
+        }
+
+        .btn-sm:disabled {
+          opacity: 0.4;
+          cursor: not-allowed;
         }
 
         /* Tabs de reconciliación */
