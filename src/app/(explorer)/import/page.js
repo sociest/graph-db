@@ -9,6 +9,88 @@ import { searchEntities, createEntity, createClaim, createQualifier, createRefer
 import { registry } from "@/plugins";
 import * as XLSX from "xlsx";
 
+// Configuración de rate limit y batching
+const BATCH_SIZE = 10; // Número de operaciones por lote
+const BATCH_DELAY = 100; // ms entre lotes
+const RATE_LIMIT_RETRY_DELAY = 1000; // 1 segundo de espera si hay rate limit
+const MAX_RETRIES = 3; // Máximo de reintentos por operación
+
+/**
+ * Ejecuta una función con reintentos en caso de rate limit
+ */
+async function withRetry(fn, retries = MAX_RETRIES) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      const isRateLimit = 
+        error?.code === 429 || 
+        error?.message?.toLowerCase().includes("rate limit") ||
+        error?.message?.toLowerCase().includes("too many requests");
+      
+      if (isRateLimit && attempt < retries) {
+        console.warn(`Rate limit alcanzado, esperando ${RATE_LIMIT_RETRY_DELAY / 1000}s (intento ${attempt}/${retries})...`);
+        await sleep(RATE_LIMIT_RETRY_DELAY);
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
+/**
+ * Espera un tiempo determinado
+ */
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Procesa un array en lotes con delay entre cada lote
+ */
+async function processBatches(items, processFn, onProgress, batchSize = BATCH_SIZE) {
+  const results = [];
+  const total = items.length;
+  
+  for (let i = 0; i < total; i += batchSize) {
+    const batch = items.slice(i, Math.min(i + batchSize, total));
+    
+    // Procesar el lote en paralelo
+    const batchResults = await Promise.all(
+      batch.map((item, idx) => processFn(item, i + idx))
+    );
+    
+    results.push(...batchResults);
+    
+    // Actualizar progreso
+    if (onProgress) {
+      onProgress(Math.round(((i + batch.length) / total) * 100));
+    }
+    
+    // Esperar entre lotes para evitar rate limit
+    if (i + batchSize < total) {
+      await sleep(BATCH_DELAY);
+    }
+  }
+  
+  return results;
+}
+
+/**
+ * Normaliza un texto para comparación (minúsculas, sin espacios a los lados)
+ */
+function normalizeText(text) {
+  if (!text) return "";
+  return String(text).toLowerCase().trim();
+}
+
+/**
+ * Compara dos textos normalizados
+ */
+function textMatches(a, b) {
+  return normalizeText(a) === normalizeText(b);
+}
+
 // Tipos de datos disponibles para las columnas
 const DATA_TYPES = [
   { id: "string", label: "Texto" },
@@ -337,39 +419,45 @@ export default function ImportPage() {
     setReconcileStep("entities");
     
     // Fase 1: Reconciliar entidades principales
-    const results = {};
-    const total = rawData.length;
+    // Extraer labels únicos primero
+    const uniqueLabels = [...new Set(
+      rawData
+        .map((row) => String(row[labelColumn] || "").trim())
+        .filter(Boolean)
+    )];
     
-    for (let i = 0; i < rawData.length; i++) {
-      const row = rawData[i];
-      const label = String(row[labelColumn] || "").trim();
-      
-      if (label && !results[label]) {
+    const results = {};
+    
+    // Procesar en lotes con retry
+    await processBatches(
+      uniqueLabels,
+      async (label) => {
         try {
-          const matches = await searchEntities(label, 5);
+          const matches = await withRetry(() => searchEntities(label, 5));
+          const matchList = matches.rows || [];
+          
+          // Buscar coincidencia por label o alias (normalizado)
+          const bestMatch = matchList.find(
+            (m) => textMatches(m.label, label) ||
+                   m.aliases?.some(a => textMatches(a, label))
+          );
+          
+          // Siempre permitir cambiar - selectedMatch es sugerencia, no obligatorio
           results[label] = {
             label,
-            matches: matches.rows || [],
-            selectedMatch: null,
-            createNew: true,
+            matches: matchList,
+            selectedMatch: bestMatch || null,
+            createNew: !bestMatch, // Sugerencia, el usuario puede cambiar
           };
-          
-          // Auto-seleccionar si hay coincidencia exacta (por label o alias)
-          const exactMatch = (matches.rows || []).find(
-            (m) => m.label?.toLowerCase() === label.toLowerCase() ||
-                   m.aliases?.some(a => a.toLowerCase() === label.toLowerCase())
-          );
-          if (exactMatch) {
-            results[label].selectedMatch = exactMatch;
-            results[label].createNew = false;
-          }
         } catch (err) {
+          console.error(`Error reconciliando "${label}":`, err);
           results[label] = { label, matches: [], selectedMatch: null, createNew: true };
         }
-      }
-      
-      setReconcileProgress(Math.round(((i + 1) / total) * 100));
-    }
+        return label;
+      },
+      (progress) => setReconcileProgress(progress),
+      BATCH_SIZE
+    );
     
     setReconcileResults(results);
     
@@ -399,49 +487,49 @@ export default function ImportPage() {
       return;
     }
     
-    // Recopilar todos los valores únicos de las columnas entity
-    const uniqueValues = new Map(); // Map<columnName, Set<value>>
+    // Recopilar todos los valores únicos de las columnas entity como array plano
+    const allValuesToReconcile = [];
     
     for (const col of entityColumns) {
-      const values = new Set();
+      const valuesSet = new Set();
       for (const row of rawData) {
         const val = String(row[col] || "").trim();
-        if (val) values.add(val);
+        if (val && !valuesSet.has(val)) {
+          valuesSet.add(val);
+          allValuesToReconcile.push({ col, value: val });
+        }
       }
-      uniqueValues.set(col, values);
     }
     
-    // Reconciliar cada valor único
+    // Reconciliar en lotes
     const relationResults = {};
-    let processed = 0;
-    let totalValues = 0;
-    
-    for (const values of uniqueValues.values()) {
-      totalValues += values.size;
+    for (const col of entityColumns) {
+      relationResults[col] = {};
     }
     
-    for (const [col, values] of uniqueValues.entries()) {
-      relationResults[col] = {};
-      
-      for (const value of values) {
+    await processBatches(
+      allValuesToReconcile,
+      async ({ col, value }) => {
         try {
-          const matches = await searchEntities(value, 5);
+          const matches = await withRetry(() => searchEntities(value, 5));
           const matchList = matches.rows || [];
           
-          // Auto-seleccionar coincidencia exacta (por label o alias)
-          const exactMatch = matchList.find(
-            (m) => m.label?.toLowerCase() === value.toLowerCase() ||
-                   m.aliases?.some(a => a.toLowerCase() === value.toLowerCase())
+          // Buscar coincidencia por label o alias (normalizado)
+          const bestMatch = matchList.find(
+            (m) => textMatches(m.label, value) ||
+                   m.aliases?.some(a => textMatches(a, value))
           );
           
+          // Siempre permitir cambiar - selectedMatch es sugerencia
           relationResults[col][value] = {
             value,
             matches: matchList,
-            selectedMatch: exactMatch || null,
-            createNew: !exactMatch,
+            selectedMatch: bestMatch || null,
+            createNew: !bestMatch, // Sugerencia, el usuario puede cambiar
             skip: false,
           };
         } catch (err) {
+          console.error(`Error reconciliando relación "${value}":`, err);
           relationResults[col][value] = {
             value,
             matches: [],
@@ -450,11 +538,11 @@ export default function ImportPage() {
             skip: false,
           };
         }
-        
-        processed++;
-        setReconcileProgress(Math.round((processed / totalValues) * 100));
-      }
-    }
+        return { col, value };
+      },
+      (progress) => setReconcileProgress(progress),
+      BATCH_SIZE
+    );
     
     setRelationReconcile(relationResults);
   }
@@ -500,76 +588,101 @@ export default function ImportPage() {
     // Mapa para guardar entidades de relación creadas durante la importación
     const createdRelationEntities = {}; // { "column:value": entityId }
     
-    // Primero crear las propiedades necesarias
+    // Primero crear las propiedades necesarias (en lotes)
     const propertyMap = {};
-    for (const [column, mapping] of Object.entries(columnMapping)) {
-      if (!mapping.enabled || column === labelColumn || column === descriptionColumn || column === aliasesColumn) {
-        continue;
+    const propertiesToCreate = Object.entries(columnMapping)
+      .filter(([column, mapping]) => 
+        mapping.enabled && 
+        column !== labelColumn && 
+        column !== descriptionColumn && 
+        column !== aliasesColumn &&
+        mapping.createProperty && 
+        !mapping.propertyId
+      );
+    
+    // Crear propiedades en lotes
+    for (const [column, mapping] of propertiesToCreate) {
+      try {
+        const property = await withRetry(() => createEntity({
+          label: mapping.propertyLabel || column,
+          description: `Propiedad importada: ${column}`,
+          aliases: [],
+        }, teamId));
+        propertyMap[column] = property.$id;
+      } catch (err) {
+        results.errors.push(`Error creando propiedad ${column}: ${err.message}`);
       }
-      
-      if (mapping.createProperty && !mapping.propertyId) {
-        try {
-          const property = await createEntity({
-            label: mapping.propertyLabel || column,
-            description: `Propiedad importada: ${column}`,
-            aliases: [],
-          }, teamId);
-          propertyMap[column] = property.$id;
-        } catch (err) {
-          results.errors.push(`Error creando propiedad ${column}: ${err.message}`);
-        }
-      } else if (mapping.propertyId) {
+      await sleep(BATCH_DELAY);
+    }
+    
+    // Añadir propiedades existentes al mapa
+    for (const [column, mapping] of Object.entries(columnMapping)) {
+      if (mapping.propertyId && !propertyMap[column]) {
         propertyMap[column] = mapping.propertyId;
       }
     }
     
-    // Crear propiedades para claims estáticos
+    // Crear propiedades para claims estáticos (en lotes)
     const staticPropertyMap = {};
     for (const claim of staticClaims) {
       if (!claim.propertyLabel && !claim.propertyId) continue;
       
       if (claim.createProperty && !claim.propertyId) {
         try {
-          const property = await createEntity({
+          const property = await withRetry(() => createEntity({
             label: claim.propertyLabel,
             description: `Propiedad estática importada`,
             aliases: [],
-          }, teamId);
+          }, teamId));
           staticPropertyMap[claim.id] = property.$id;
         } catch (err) {
           results.errors.push(`Error creando propiedad estática ${claim.propertyLabel}: ${err.message}`);
         }
+        await sleep(BATCH_DELAY);
       } else if (claim.propertyId) {
         staticPropertyMap[claim.id] = claim.propertyId;
       }
     }
     
-    // Crear entidades de relación que deben crearse (createNew = true)
+    // Crear entidades de relación que deben crearse (createNew = true) - en lotes
+    const relationEntitiesToCreate = [];
     for (const [column, values] of Object.entries(relationReconcile)) {
       for (const [value, info] of Object.entries(values)) {
         if (info.createNew && !info.skip && !info.selectedMatch) {
-          try {
-            const entity = await createEntity({
-              label: value,
-              description: null,
-              aliases: [],
-            }, teamId);
-            createdRelationEntities[`${column}:${value}`] = entity.$id;
-            results.relationsCreated++;
-          } catch (err) {
-            results.errors.push(`Error creando entidad de relación "${value}": ${err.message}`);
-          }
+          relationEntitiesToCreate.push({ column, value });
         }
       }
     }
     
-    // Importar cada fila
+    // Procesar creación de entidades de relación en lotes
+    await processBatches(
+      relationEntitiesToCreate,
+      async ({ column, value }) => {
+        try {
+          const entity = await withRetry(() => createEntity({
+            label: value,
+            description: null,
+            aliases: [],
+          }, teamId));
+          createdRelationEntities[`${column}:${value}`] = entity.$id;
+          results.relationsCreated++;
+        } catch (err) {
+          results.errors.push(`Error creando entidad de relación "${value}": ${err.message}`);
+        }
+        return { column, value };
+      },
+      null, // No actualizar progreso aquí
+      BATCH_SIZE
+    );
+    
+    // Importar cada fila (procesamiento secuencial pero con retry)
     for (let i = 0; i < rawData.length; i++) {
       const row = rawData[i];
       const label = String(row[labelColumn] || "").trim();
       
       if (!label) {
         results.errors.push(`Fila ${i + 1}: Sin label, omitida`);
+        setImportProgress(Math.round(((i + 1) / total) * 100));
         continue;
       }
       
@@ -587,7 +700,7 @@ export default function ImportPage() {
               : [],
           };
           
-          const entity = await createEntity(entityData, teamId);
+          const entity = await withRetry(() => createEntity(entityData, teamId));
           entityId = entity.$id;
           results.created++;
         } else {
@@ -649,7 +762,7 @@ export default function ImportPage() {
               };
             }
             
-            const createdClaim = await createClaim(claimData, teamId);
+            const createdClaim = await withRetry(() => createClaim(claimData, teamId));
             results.claims++;
             
             // Crear qualificadores si existen
@@ -678,7 +791,7 @@ export default function ImportPage() {
                     };
                   }
                   
-                  await createQualifier(qualifierData, teamId);
+                  await withRetry(() => createQualifier(qualifierData, teamId));
                   results.qualifiers++;
                 } catch (qErr) {
                   results.errors.push(`Fila ${i + 1}, columna ${column}, qualifier: ${qErr.message}`);
@@ -696,20 +809,20 @@ export default function ImportPage() {
                   
                   // Si no hay ID pero hay label, crear la entidad de referencia
                   if (!referenceEntityId && reference.referenceLabel && reference.createReference) {
-                    const refEntity = await createEntity({
+                    const refEntity = await withRetry(() => createEntity({
                       label: reference.referenceLabel,
                       description: reference.details || null,
                       aliases: [],
-                    }, teamId);
+                    }, teamId));
                     referenceEntityId = refEntity.$id;
                   }
                   
                   if (referenceEntityId) {
-                    await createReference({
+                    await withRetry(() => createReference({
                       claim: createdClaim.$id,
                       reference: referenceEntityId,
                       details: reference.details || null,
-                    }, teamId);
+                    }, teamId));
                     results.references = (results.references || 0) + 1;
                   }
                 } catch (refErr) {
@@ -750,7 +863,7 @@ export default function ImportPage() {
               };
             }
             
-            await createClaim(staticClaimData, teamId);
+            await withRetry(() => createClaim(staticClaimData, teamId));
             results.claims++;
           } catch (err) {
             results.errors.push(`Fila ${i + 1}, claim estático ${claim.propertyLabel}: ${err.message}`);
@@ -761,6 +874,11 @@ export default function ImportPage() {
       }
       
       setImportProgress(Math.round(((i + 1) / total) * 100));
+      
+      // Pequeña pausa cada N filas para evitar rate limit
+      if ((i + 1) % BATCH_SIZE === 0) {
+        await sleep(BATCH_DELAY);
+      }
     }
     
     setImportResults(results);
@@ -1268,72 +1386,14 @@ export default function ImportPage() {
                             </h3>
                             <div className="reconcile-list">
                               {Object.entries(values).map(([value, info]) => (
-                                <div key={value} className="reconcile-row relation-reconcile-row">
-                                  <div className="reconcile-label">
-                                    <span className="label-text">{value}</span>
-                                    <span className="occurrences">
-                                      {rawData.filter(row => String(row[column]).trim() === value).length} ocurrencias
-                                    </span>
-                                  </div>
-                                  
-                                  <div className="reconcile-actions">
-                                    {info.matches && info.matches.length > 0 ? (
-                                      <select
-                                        className="match-select"
-                                        value={info.skip ? "skip" : (info.createNew ? "new" : (info.selectedMatch?.$id || ""))}
-                                        onChange={(e) => {
-                                          const val = e.target.value;
-                                          if (val === "skip") {
-                                            updateRelationReconcile(column, value, { skip: true, createNew: false, selectedMatch: null });
-                                          } else if (val === "new") {
-                                            updateRelationReconcile(column, value, { createNew: true, skip: false, selectedMatch: null });
-                                          } else {
-                                            const match = info.matches.find((m) => m.$id === val);
-                                            updateRelationReconcile(column, value, { selectedMatch: match, createNew: false, skip: false });
-                                          }
-                                        }}
-                                      >
-                                        {info.matches.map((match) => (
-                                          <option key={match.$id} value={match.$id}>
-                                            {match.label}
-                                            {match.aliases?.length > 0 && ` (alias: ${match.aliases.slice(0, 2).join(", ")})`}
-                                          </option>
-                                        ))}
-                                        <option value="new">✚ Crear nueva entidad</option>
-                                        <option value="skip">⊘ Omitir</option>
-                                      </select>
-                                    ) : (
-                                      <div className="no-match-actions">
-                                        <label className="radio-option">
-                                          <input
-                                            type="radio"
-                                            checked={info.createNew && !info.skip}
-                                            onChange={() => updateRelationReconcile(column, value, { createNew: true, skip: false })}
-                                          />
-                                          <span>Crear nueva</span>
-                                        </label>
-                                        <label className="radio-option">
-                                          <input
-                                            type="radio"
-                                            checked={info.skip}
-                                            onChange={() => updateRelationReconcile(column, value, { skip: true, createNew: false })}
-                                          />
-                                          <span>Omitir</span>
-                                        </label>
-                                      </div>
-                                    )}
-                                    
-                                    {info.selectedMatch && (
-                                      <span className="match-badge">✓ {info.selectedMatch.label}</span>
-                                    )}
-                                    {info.createNew && !info.skip && (
-                                      <span className="create-badge">✚ Nueva</span>
-                                    )}
-                                    {info.skip && (
-                                      <span className="skip-badge">⊘ Omitir</span>
-                                    )}
-                                  </div>
-                                </div>
+                                <RelationReconcileItem
+                                  key={value}
+                                  column={column}
+                                  value={value}
+                                  info={info}
+                                  occurrences={rawData.filter(row => String(row[column]).trim() === value).length}
+                                  onUpdate={(updates) => updateRelationReconcile(column, value, updates)}
+                                />
                               ))}
                             </div>
                           </div>
@@ -4163,6 +4223,40 @@ function ReconcileRow({ result, onUpdate }) {
             />
             <span className="match-label">Crear nueva entidad</span>
           </label>
+          
+          {/* Selector de entidad personalizado */}
+          <div className="custom-entity-selector">
+            <span className="selector-label">O seleccionar otra entidad:</span>
+            <EntitySelectorInline
+              onSelect={(entity) => onUpdate({ selectedMatch: entity, createNew: false })}
+              placeholder="Buscar entidad..."
+            />
+          </div>
+        </div>
+      )}
+      
+      {/* Mostrar opciones aunque no haya matches */}
+      {expanded && result.matches.length === 0 && (
+        <div className="reconcile-options">
+          <div className="option-header">No se encontraron coincidencias</div>
+          <label className="match-option create-new">
+            <input
+              type="radio"
+              name={`reconcile-${result.label}`}
+              checked={result.createNew}
+              onChange={() => onUpdate({ selectedMatch: null, createNew: true })}
+            />
+            <span className="match-label">Crear nueva entidad</span>
+          </label>
+          
+          {/* Selector de entidad personalizado */}
+          <div className="custom-entity-selector">
+            <span className="selector-label">O seleccionar entidad existente:</span>
+            <EntitySelectorInline
+              onSelect={(entity) => onUpdate({ selectedMatch: entity, createNew: false })}
+              placeholder="Buscar entidad..."
+            />
+          </div>
         </div>
       )}
 
@@ -4272,6 +4366,349 @@ function ReconcileRow({ result, onUpdate }) {
           border-top: 1px solid var(--color-border-light, #c8ccd1);
           margin-top: 0.5rem;
           padding-top: 0.75rem;
+        }
+        
+        .custom-entity-selector {
+          margin-top: 0.75rem;
+          padding-top: 0.75rem;
+          border-top: 1px dashed var(--color-border-light, #c8ccd1);
+        }
+        
+        .selector-label {
+          display: block;
+          font-size: 0.75rem;
+          color: var(--color-text-muted, #72777d);
+          margin-bottom: 0.5rem;
+        }
+      `}</style>
+    </div>
+  );
+}
+
+// Selector de entidad inline para reconciliación
+function EntitySelectorInline({ onSelect, placeholder = "Buscar entidad..." }) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [showResults, setShowResults] = useState(false);
+  const debounceRef = useRef(null);
+  
+  async function handleSearch(searchQuery) {
+    if (!searchQuery || searchQuery.length < 2) {
+      setResults([]);
+      return;
+    }
+    
+    setLoading(true);
+    try {
+      const response = await searchEntities(searchQuery, 10);
+      setResults(response.rows || []);
+    } catch (err) {
+      console.error("Error buscando entidades:", err);
+      setResults([]);
+    } finally {
+      setLoading(false);
+    }
+  }
+  
+  function handleInputChange(e) {
+    const value = e.target.value;
+    setQuery(value);
+    setShowResults(true);
+    
+    // Debounce la búsqueda
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+    }
+    debounceRef.current = setTimeout(() => {
+      handleSearch(value);
+    }, 300);
+  }
+  
+  function handleSelect(entity) {
+    onSelect(entity);
+    setQuery(entity.label);
+    setShowResults(false);
+    setResults([]);
+  }
+  
+  return (
+    <div className="entity-selector-inline">
+      <input
+        type="text"
+        value={query}
+        onChange={handleInputChange}
+        onFocus={() => setShowResults(true)}
+        onBlur={() => setTimeout(() => setShowResults(false), 200)}
+        placeholder={placeholder}
+        className="entity-search-input"
+      />
+      {loading && <span className="search-loading">Buscando...</span>}
+      {showResults && results.length > 0 && (
+        <div className="entity-results-dropdown">
+          {results.map((entity) => (
+            <div
+              key={entity.$id}
+              className="entity-result-item"
+              onMouseDown={() => handleSelect(entity)}
+            >
+              <span className="entity-result-label">{entity.label}</span>
+              {entity.description && (
+                <span className="entity-result-desc">{truncate(entity.description, 50)}</span>
+              )}
+              {entity.aliases?.length > 0 && (
+                <span className="entity-result-aliases">
+                  Aliases: {entity.aliases.slice(0, 3).join(", ")}
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      
+      <style jsx>{`
+        .entity-selector-inline {
+          position: relative;
+        }
+        
+        .entity-search-input {
+          width: 100%;
+          padding: 0.5rem;
+          border: 1px solid var(--color-border, #a2a9b1);
+          border-radius: var(--radius-sm, 2px);
+          font-size: 0.875rem;
+        }
+        
+        .entity-search-input:focus {
+          outline: none;
+          border-color: var(--color-primary, #0645ad);
+          box-shadow: 0 0 0 2px rgba(6, 69, 173, 0.1);
+        }
+        
+        .search-loading {
+          position: absolute;
+          right: 0.5rem;
+          top: 50%;
+          transform: translateY(-50%);
+          font-size: 0.75rem;
+          color: var(--color-text-muted, #72777d);
+        }
+        
+        .entity-results-dropdown {
+          position: absolute;
+          top: 100%;
+          left: 0;
+          right: 0;
+          background: white;
+          border: 1px solid var(--color-border, #a2a9b1);
+          border-top: none;
+          border-radius: 0 0 var(--radius-sm, 2px) var(--radius-sm, 2px);
+          max-height: 200px;
+          overflow-y: auto;
+          z-index: 100;
+          box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+        
+        .entity-result-item {
+          padding: 0.5rem;
+          cursor: pointer;
+          border-bottom: 1px solid var(--color-border-light, #c8ccd1);
+        }
+        
+        .entity-result-item:last-child {
+          border-bottom: none;
+        }
+        
+        .entity-result-item:hover {
+          background: var(--color-bg, #f8f9fa);
+        }
+        
+        .entity-result-label {
+          font-weight: 500;
+          display: block;
+        }
+        
+        .entity-result-desc {
+          font-size: 0.75rem;
+          color: var(--color-text-secondary, #54595d);
+          display: block;
+        }
+        
+        .entity-result-aliases {
+          font-size: 0.7rem;
+          color: var(--color-text-muted, #72777d);
+          display: block;
+          font-style: italic;
+        }
+      `}</style>
+    </div>
+  );
+}
+
+// Componente para reconciliación de relaciones con buscador
+function RelationReconcileItem({ column, value, info, occurrences, onUpdate }) {
+  const [showSearch, setShowSearch] = useState(false);
+  
+  return (
+    <div className="reconcile-row relation-reconcile-row">
+      <div className="reconcile-label">
+        <span className="label-text">{value}</span>
+        <span className="occurrences">{occurrences} ocurrencias</span>
+      </div>
+      
+      <div className="reconcile-actions">
+        {/* Selector principal */}
+        <select
+          className="match-select"
+          value={info.skip ? "skip" : (info.createNew ? "new" : (info.selectedMatch?.$id || "search"))}
+          onChange={(e) => {
+            const val = e.target.value;
+            if (val === "skip") {
+              onUpdate({ skip: true, createNew: false, selectedMatch: null });
+              setShowSearch(false);
+            } else if (val === "new") {
+              onUpdate({ createNew: true, skip: false, selectedMatch: null });
+              setShowSearch(false);
+            } else if (val === "search") {
+              setShowSearch(true);
+            } else {
+              const match = info.matches?.find((m) => m.$id === val);
+              if (match) {
+                onUpdate({ selectedMatch: match, createNew: false, skip: false });
+                setShowSearch(false);
+              }
+            }
+          }}
+        >
+          {info.matches?.map((match) => (
+            <option key={match.$id} value={match.$id}>
+              {match.label}
+              {match.aliases?.length > 0 && ` (${match.aliases.slice(0, 2).join(", ")})`}
+            </option>
+          ))}
+          <option value="search">🔍 Buscar otra entidad...</option>
+          <option value="new">✚ Crear nueva entidad</option>
+          <option value="skip">⊘ Omitir</option>
+        </select>
+        
+        {/* Badges de estado */}
+        {info.selectedMatch && !showSearch && (
+          <span className="match-badge">✓ {info.selectedMatch.label}</span>
+        )}
+        {info.createNew && !info.skip && (
+          <span className="create-badge">✚ Nueva</span>
+        )}
+        {info.skip && (
+          <span className="skip-badge">⊘ Omitir</span>
+        )}
+      </div>
+      
+      {/* Buscador expandido */}
+      {showSearch && (
+        <div className="relation-search-container">
+          <EntitySelectorInline
+            onSelect={(entity) => {
+              onUpdate({ selectedMatch: entity, createNew: false, skip: false });
+              setShowSearch(false);
+            }}
+            placeholder="Buscar entidad por nombre o alias..."
+          />
+          <button
+            type="button"
+            className="cancel-search-btn"
+            onClick={() => setShowSearch(false)}
+          >
+            Cancelar
+          </button>
+        </div>
+      )}
+      
+      <style jsx>{`
+        .relation-reconcile-row {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 0.5rem;
+          padding: 0.75rem;
+          border-bottom: 1px solid var(--color-border-light, #c8ccd1);
+        }
+        
+        .reconcile-label {
+          flex: 1;
+          min-width: 150px;
+        }
+        
+        .label-text {
+          font-weight: 500;
+        }
+        
+        .occurrences {
+          font-size: 0.75rem;
+          color: var(--color-text-muted, #72777d);
+          margin-left: 0.5rem;
+        }
+        
+        .reconcile-actions {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          flex-wrap: wrap;
+        }
+        
+        .match-select {
+          padding: 0.25rem 0.5rem;
+          border: 1px solid var(--color-border, #a2a9b1);
+          border-radius: var(--radius-sm, 2px);
+          font-size: 0.875rem;
+          min-width: 200px;
+        }
+        
+        .match-badge {
+          font-size: 0.75rem;
+          padding: 0.125rem 0.5rem;
+          background: rgba(20, 134, 109, 0.1);
+          color: var(--color-success, #14866d);
+          border-radius: var(--radius-sm, 2px);
+        }
+        
+        .create-badge {
+          font-size: 0.75rem;
+          padding: 0.125rem 0.5rem;
+          background: rgba(6, 69, 173, 0.1);
+          color: var(--color-primary, #0645ad);
+          border-radius: var(--radius-sm, 2px);
+        }
+        
+        .skip-badge {
+          font-size: 0.75rem;
+          padding: 0.125rem 0.5rem;
+          background: rgba(114, 119, 125, 0.1);
+          color: var(--color-text-muted, #72777d);
+          border-radius: var(--radius-sm, 2px);
+        }
+        
+        .relation-search-container {
+          width: 100%;
+          margin-top: 0.5rem;
+          display: flex;
+          gap: 0.5rem;
+          align-items: flex-start;
+        }
+        
+        .relation-search-container > :first-child {
+          flex: 1;
+        }
+        
+        .cancel-search-btn {
+          padding: 0.5rem 1rem;
+          background: var(--color-bg-alt, #eaecf0);
+          border: 1px solid var(--color-border, #a2a9b1);
+          border-radius: var(--radius-sm, 2px);
+          cursor: pointer;
+          font-size: 0.75rem;
+        }
+        
+        .cancel-search-btn:hover {
+          background: var(--color-border-light, #c8ccd1);
         }
       `}</style>
     </div>
