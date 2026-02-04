@@ -75,35 +75,76 @@ function renderPolygon(data, options = {}) {
 
   const { datatype } = options;
 
+  // Si es una referencia a archivo en bucket
+  if (data.fileId && data.bucketId) {
+    return {
+      type: "geometry-file",
+      fileId: data.fileId,
+      bucketId: data.bucketId,
+      url: data.url,
+      geometryType: datatype,
+    };
+  }
+
+  // Parsear si viene como string
+  let coords = data;
+  if (typeof data === "string") {
+    try {
+      const parsed = JSON.parse(data);
+      // Soportar GeoJSON completo o solo coordenadas
+      coords = parsed.coordinates || parsed.geometry?.coordinates || parsed;
+    } catch (e) {
+      return String(data);
+    }
+  } else if (data.coordinates) {
+    // GeoJSON object
+    coords = data.coordinates;
+  } else if (data.geometry?.coordinates) {
+    // GeoJSON Feature
+    coords = data.geometry.coordinates;
+  }
+
   // Validar que sea un array de coordenadas
-  if (!Array.isArray(data)) {
+  if (!Array.isArray(coords)) {
     return String(data);
   }
 
   // Calcular el centro del polígono para mostrar en mapa
-  const center = calculateCenter(data);
-  const bounds = calculateBounds(data);
+  const center = calculateCenter(coords);
+  const bounds = calculateBounds(coords);
 
   return {
     type: "geometry",
     geometryType: datatype,
-    coordinates: data,
+    coordinates: coords,
     center,
     bounds,
-    pointCount: countPoints(data),
+    pointCount: countPoints(coords),
   };
 }
 
 const PolygonPlugin = {
   name: "polygon",
-  datatypes: ["polygon", "multipolygon", "linestring", "geometry"],
+  datatypes: ["polygon", "multipolygon", "linestring", "geometry", "geojson"],
   priority: 0,
+  
+  // Configuración de bucket para datos GeoJSON grandes
+  storage: {
+    bucketId: process.env.NEXT_PUBLIC_BUCKET_GEOJSON || "geojson",
+    maxInlineChars: 10000, // Más de 10k caracteres se sube a bucket
+    mimeType: "application/geo+json",
+  },
 
   render: renderPolygon,
 
   preview(data, options = {}) {
+    // Si es referencia a archivo
+    if (data?.fileId && data?.bucketId) {
+      return "📁 GeoJSON (archivo)";
+    }
+    
     const result = renderPolygon(data, options);
-    if (result && typeof result === "object") {
+    if (result && typeof result === "object" && result.pointCount) {
       return `Polígono (${result.pointCount} puntos)`;
     }
     return result;

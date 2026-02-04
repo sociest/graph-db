@@ -1,10 +1,12 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Navigation, LoadingState } from "@/components";
 import { useAuth } from "@/context/AuthContext";
-import { searchEntities, createEntity, createClaim } from "@/lib/database";
+import * as database from "@/lib/database";
+import { searchEntities, createEntity, createClaim, createQualifier, createReference, uploadGeoJSON, uploadJSON, BUCKETS } from "@/lib/database";
+import { registry } from "@/plugins";
 import * as XLSX from "xlsx";
 
 // Tipos de datos disponibles para las columnas
@@ -71,6 +73,7 @@ export default function ImportPage() {
   const [importProgress, setImportProgress] = useState(0);
   const [importResults, setImportResults] = useState({ created: 0, updated: 0, errors: [] });
   const [isImporting, setIsImporting] = useState(false);
+  const importResultsRef = useRef(null); // Referencia para trackear resultados durante importación async
   
   // UI
   const [error, setError] = useState(null);
@@ -489,7 +492,8 @@ export default function ImportPage() {
     setIsImporting(true);
     setImportProgress(0);
     
-    const results = { created: 0, updated: 0, claims: 0, relationsCreated: 0, errors: [] };
+    const results = { created: 0, updated: 0, claims: 0, qualifiers: 0, references: 0, filesUploaded: 0, relationsCreated: 0, errors: [] };
+    importResultsRef.current = results; // Guardar referencia para uso en funciones async
     const total = rawData.length;
     const teamId = activeTeam?.$id || null;
     
@@ -633,7 +637,8 @@ export default function ImportPage() {
               };
             } else {
               // Para otros tipos de datos, usar value_raw con el formato {datatype, value}
-              const formattedValue = formatValue(value, mapping.dataType);
+              // Usar formatValueWithUpload para subir datos grandes a bucket
+              const formattedValue = await formatValueWithUpload(value, mapping.dataType, label, teamId);
               claimData = {
                 subject: entityId,
                 property: propertyId,
@@ -644,8 +649,74 @@ export default function ImportPage() {
               };
             }
             
-            await createClaim(claimData, teamId);
+            const createdClaim = await createClaim(claimData, teamId);
             results.claims++;
+            
+            // Crear qualificadores si existen
+            if (mapping.qualifiers && mapping.qualifiers.length > 0) {
+              for (const qualifier of mapping.qualifiers) {
+                if (!qualifier.propertyId || !qualifier.value) continue;
+                
+                try {
+                  let qualifierData;
+                  
+                  if (qualifier.dataType === "entity") {
+                    qualifierData = {
+                      claim: createdClaim.$id,
+                      property: qualifier.propertyId,
+                      value_relation: qualifier.value,
+                    };
+                  } else {
+                    const formattedQualValue = await formatValueWithUpload(qualifier.value, qualifier.dataType, label, teamId);
+                    qualifierData = {
+                      claim: createdClaim.$id,
+                      property: qualifier.propertyId,
+                      value_raw: {
+                        datatype: qualifier.dataType,
+                        value: formattedQualValue,
+                      },
+                    };
+                  }
+                  
+                  await createQualifier(qualifierData, teamId);
+                  results.qualifiers++;
+                } catch (qErr) {
+                  results.errors.push(`Fila ${i + 1}, columna ${column}, qualifier: ${qErr.message}`);
+                }
+              }
+            }
+            
+            // Crear referencias si existen
+            if (mapping.references && mapping.references.length > 0) {
+              for (const reference of mapping.references) {
+                if (!reference.referenceId && !reference.referenceLabel) continue;
+                
+                try {
+                  let referenceEntityId = reference.referenceId;
+                  
+                  // Si no hay ID pero hay label, crear la entidad de referencia
+                  if (!referenceEntityId && reference.referenceLabel && reference.createReference) {
+                    const refEntity = await createEntity({
+                      label: reference.referenceLabel,
+                      description: reference.details || null,
+                      aliases: [],
+                    }, teamId);
+                    referenceEntityId = refEntity.$id;
+                  }
+                  
+                  if (referenceEntityId) {
+                    await createReference({
+                      claim: createdClaim.$id,
+                      reference: referenceEntityId,
+                      details: reference.details || null,
+                    }, teamId);
+                    results.references = (results.references || 0) + 1;
+                  }
+                } catch (refErr) {
+                  results.errors.push(`Fila ${i + 1}, columna ${column}, referencia: ${refErr.message}`);
+                }
+              }
+            }
           } catch (err) {
             results.errors.push(`Fila ${i + 1}, columna ${column}: ${err.message}`);
           }
@@ -657,15 +728,27 @@ export default function ImportPage() {
           if (!staticPropertyId || !claim.value) continue;
           
           try {
-            const formattedValue = formatValue(claim.value, claim.dataType);
-            const staticClaimData = {
-              subject: entityId,
-              property: staticPropertyId,
-              value_raw: {
-                datatype: claim.dataType,
-                value: formattedValue,
-              },
-            };
+            let staticClaimData;
+            
+            if (claim.dataType === "entity") {
+              // Claim de tipo relación con otra entidad
+              staticClaimData = {
+                subject: entityId,
+                property: staticPropertyId,
+                value_relation: claim.value, // ID de la entidad relacionada
+              };
+            } else {
+              // Claim con valor raw (con subida a bucket si es necesario)
+              const formattedValue = await formatValueWithUpload(claim.value, claim.dataType, label, teamId);
+              staticClaimData = {
+                subject: entityId,
+                property: staticPropertyId,
+                value_raw: {
+                  datatype: claim.dataType,
+                  value: formattedValue,
+                },
+              };
+            }
             
             await createClaim(staticClaimData, teamId);
             results.claims++;
@@ -685,7 +768,10 @@ export default function ImportPage() {
     setCurrentStep(STEPS.COMPLETE);
   }
 
-  // Formatear valor según tipo de dato
+  // Umbral de caracteres para subir a bucket (10KB)
+  const BUCKET_THRESHOLD = 10000;
+
+  // Formatear valor según tipo de dato (versión síncrona para valores pequeños)
   function formatValue(value, dataType) {
     switch (dataType) {
       case "number":
@@ -700,12 +786,11 @@ export default function ImportPage() {
       case "polygon":
         // Para polígonos (GeoJSON), comprimir el JSON (sin espacios)
         if (typeof value === "object") {
-          return JSON.stringify(value); // Ya comprimido (sin espacios)
+          return JSON.stringify(value);
         }
         try {
-          // Parsear y re-stringify para comprimir
           const parsed = JSON.parse(value);
-          return JSON.stringify(parsed); // Comprimido
+          return JSON.stringify(parsed);
         } catch {
           return String(value);
         }
@@ -716,13 +801,59 @@ export default function ImportPage() {
         }
         try {
           const parsed = JSON.parse(value);
-          return JSON.stringify(parsed); // Comprimido
+          return JSON.stringify(parsed);
         } catch {
           return String(value);
         }
       default:
         return String(value);
     }
+  }
+
+  // Formatear valor y subir a bucket si es necesario (versión async)
+  // Devuelve { value, uploaded: boolean }
+  async function formatValueWithUpload(value, dataType, entityLabel, teamIdParam) {
+    const formattedValue = formatValue(value, dataType);
+    const valueStr = typeof formattedValue === "string" ? formattedValue : JSON.stringify(formattedValue);
+    
+    // Verificar si debe subirse a bucket según el tamaño
+    if (valueStr.length > BUCKET_THRESHOLD) {
+      try {
+        if (dataType === "polygon" || dataType === "geojson") {
+          // Subir GeoJSON a su bucket
+          const uploaded = await uploadGeoJSON(formattedValue, entityLabel, teamIdParam);
+          // Incrementar contador de archivos subidos
+          if (importResultsRef.current) {
+            importResultsRef.current.filesUploaded = (importResultsRef.current.filesUploaded || 0) + 1;
+          }
+          return {
+            fileId: uploaded.fileId,
+            bucketId: uploaded.bucketId,
+            url: uploaded.url,
+            size: uploaded.size,
+          };
+        } else if (dataType === "json") {
+          // Subir JSON a su bucket
+          const uploaded = await uploadJSON(formattedValue, entityLabel, teamIdParam);
+          // Incrementar contador de archivos subidos
+          if (importResultsRef.current) {
+            importResultsRef.current.filesUploaded = (importResultsRef.current.filesUploaded || 0) + 1;
+          }
+          return {
+            fileId: uploaded.fileId,
+            bucketId: uploaded.bucketId,
+            url: uploaded.url,
+            size: uploaded.size,
+          };
+        }
+      } catch (uploadErr) {
+        console.error("Error uploading to bucket:", uploadErr);
+        // Si falla la subida, devolver el valor formateado normal
+        return formattedValue;
+      }
+    }
+    
+    return formattedValue;
   }
 
   // Reiniciar el wizard
@@ -994,7 +1125,6 @@ export default function ImportPage() {
                       claim={claim}
                       onUpdate={(updates) => updateStaticClaim(claim.id, updates)}
                       onRemove={() => removeStaticClaim(claim.id)}
-                      onSearchProperties={searchProperties}
                     />
                   ))}
                 </div>
@@ -1384,6 +1514,24 @@ export default function ImportPage() {
                   <span className="stat-value">{importResults.claims}</span>
                   <span className="stat-label">Claims creados</span>
                 </div>
+                {importResults.qualifiers > 0 && (
+                  <div className="summary-stat">
+                    <span className="stat-value">{importResults.qualifiers}</span>
+                    <span className="stat-label">Qualificadores creados</span>
+                  </div>
+                )}
+                {importResults.references > 0 && (
+                  <div className="summary-stat">
+                    <span className="stat-value success">{importResults.references}</span>
+                    <span className="stat-label">Referencias creadas</span>
+                  </div>
+                )}
+                {importResults.filesUploaded > 0 && (
+                  <div className="summary-stat">
+                    <span className="stat-value info">{importResults.filesUploaded}</span>
+                    <span className="stat-label">Archivos en bucket</span>
+                  </div>
+                )}
                 {importResults.errors.length > 0 && (
                   <div className="summary-stat">
                     <span className="stat-value error">{importResults.errors.length}</span>
@@ -2224,20 +2372,23 @@ function ColumnMappingRow({ column, mapping, onUpdate, onSearchProperties, sampl
   const [searchResults, setSearchResults] = useState([]);
   const [showSearch, setShowSearch] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [showQualifiers, setShowQualifiers] = useState(false);
+  const [showReferences, setShowReferences] = useState(false);
 
-  // Cargar sugerencias iniciales cuando se abre el buscador
-  async function openSearch() {
-    setShowSearch(true);
-    if (searchResults.length === 0) {
-      setIsLoading(true);
-      try {
-        const results = await onSearchProperties("");
-        setSearchResults(results);
-      } catch (err) {
-        console.error("Error loading properties:", err);
-      }
-      setIsLoading(false);
+  // Cargar entidades al montar el componente
+  useEffect(() => {
+    loadInitialEntities();
+  }, []);
+
+  async function loadInitialEntities() {
+    setIsLoading(true);
+    try {
+      const results = await onSearchProperties("");
+      setSearchResults(results);
+    } catch (err) {
+      console.error("Error loading entities:", err);
     }
+    setIsLoading(false);
   }
 
   async function handleSearch(query) {
@@ -2247,7 +2398,7 @@ function ColumnMappingRow({ column, mapping, onUpdate, onSearchProperties, sampl
       const results = await onSearchProperties(query);
       setSearchResults(results);
     } catch (err) {
-      console.error("Error searching properties:", err);
+      console.error("Error searching entities:", err);
       setSearchResults([]);
     }
     setIsLoading(false);
@@ -2263,113 +2414,230 @@ function ColumnMappingRow({ column, mapping, onUpdate, onSearchProperties, sampl
     setSearchQuery("");
   }
 
+  function addQualifier() {
+    const qualifiers = mapping?.qualifiers || [];
+    onUpdate({
+      qualifiers: [...qualifiers, {
+        id: Date.now(),
+        propertyId: null,
+        propertyLabel: "",
+        dataType: "string",
+        value: "",
+        createProperty: true,
+      }]
+    });
+  }
+
+  function updateQualifier(qualifierId, updates) {
+    const qualifiers = (mapping?.qualifiers || []).map(q =>
+      q.id === qualifierId ? { ...q, ...updates } : q
+    );
+    onUpdate({ qualifiers });
+  }
+
+  function removeQualifier(qualifierId) {
+    const qualifiers = (mapping?.qualifiers || []).filter(q => q.id !== qualifierId);
+    onUpdate({ qualifiers });
+  }
+
+  function addReference() {
+    const references = mapping?.references || [];
+    onUpdate({
+      references: [...references, {
+        id: Date.now(),
+        referenceId: null,
+        referenceLabel: "",
+        details: "",
+        createReference: true,
+      }]
+    });
+  }
+
+  function updateReference(referenceId, updates) {
+    const references = (mapping?.references || []).map(r =>
+      r.id === referenceId ? { ...r, ...updates } : r
+    );
+    onUpdate({ references });
+  }
+
+  function removeReference(referenceId) {
+    const references = (mapping?.references || []).filter(r => r.id !== referenceId);
+    onUpdate({ references });
+  }
+
   return (
-    <div className="column-mapping-row">
-      <div className="column-toggle">
-        <input
-          type="checkbox"
-          checked={mapping?.enabled !== false}
-          onChange={(e) => onUpdate({ enabled: e.target.checked })}
-        />
-      </div>
-      
-      <div className="column-info">
-        <span className="column-name">{column}</span>
-        <span className="column-samples">
-          {sampleValues.filter(Boolean).slice(0, 2).map((v, i) => (
-            <span key={i} className="sample-value">{truncate(String(v), 20)}</span>
-          ))}
-        </span>
-      </div>
-      
-      <div className="column-property">
-        {mapping?.createProperty ? (
-          <div className="property-new">
-            <input
-              type="text"
-              value={mapping?.propertyLabel || column}
-              onChange={(e) => onUpdate({ propertyLabel: e.target.value })}
-              placeholder="Nombre de la propiedad"
-            />
-            <button 
-              className="link-btn"
-              onClick={openSearch}
-              title="Buscar propiedad existente"
-            >
-              🔗
-            </button>
-          </div>
-        ) : (
-          <div className="property-selected">
-            <span className="property-label">{mapping?.propertyLabel}</span>
-            <button 
-              className="unlink-btn"
-              onClick={() => onUpdate({ propertyId: null, createProperty: true })}
-              title="Desvincular"
-            >
-              ✕
-            </button>
-          </div>
-        )}
+    <div className="column-mapping-row-container">
+      <div className="column-mapping-row">
+        <div className="column-toggle">
+          <input
+            type="checkbox"
+            checked={mapping?.enabled !== false}
+            onChange={(e) => onUpdate({ enabled: e.target.checked })}
+          />
+        </div>
         
-        {showSearch && (
-          <div className="property-search-dropdown">
-            <div className="search-header">
-              <span className="search-title">Seleccionar propiedad existente</span>
+        <div className="column-info">
+          <span className="column-name">{column}</span>
+          <span className="column-samples">
+            {sampleValues.filter(Boolean).slice(0, 2).map((v, i) => (
+              <span key={i} className="sample-value">{truncate(String(v), 20)}</span>
+            ))}
+          </span>
+        </div>
+        
+        <div className="column-property">
+          <div className="property-selector">
+            <div className="property-input-wrapper">
+              {mapping?.createProperty ? (
+                <input
+                  type="text"
+                  value={mapping?.propertyLabel || column}
+                  onChange={(e) => onUpdate({ propertyLabel: e.target.value })}
+                  placeholder="Nombre de nueva propiedad"
+                  className="property-input"
+                />
+              ) : (
+                <div className="property-selected-inline">
+                  <span className="property-label">{mapping?.propertyLabel}</span>
+                </div>
+              )}
+              <button 
+                className={`btn-toggle-list ${showSearch ? 'active' : ''}`}
+                onClick={() => setShowSearch(!showSearch)}
+                title="Ver lista de entidades"
+              >
+                ▼
+              </button>
+              {!mapping?.createProperty && (
+                <button 
+                  className="btn-unlink"
+                  onClick={() => onUpdate({ propertyId: null, createProperty: true })}
+                  title="Crear nueva propiedad"
+                >
+                  ✕
+                </button>
+              )}
             </div>
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => handleSearch(e.target.value)}
-              placeholder="Buscar propiedad por nombre..."
-              autoFocus
-            />
-            <div className="search-results">
-              {isLoading && <p className="loading-results">Cargando...</p>}
-              {!isLoading && searchResults.length > 0 && (
-                <>
-                  <p className="results-hint">Selecciona una propiedad:</p>
-                  {searchResults.map((p) => (
-                    <button key={p.$id} onClick={() => selectProperty(p)} className="property-option">
-                      <span className="property-option-label">{p.label}</span>
-                      {p.description && (
-                        <span className="property-option-desc">{truncate(p.description, 50)}</span>
+            
+            {showSearch && (
+              <div className="entities-dropdown">
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => handleSearch(e.target.value)}
+                  placeholder="Buscar entidad..."
+                  className="search-input"
+                  autoFocus
+                />
+                <div className="entities-list">
+                  {isLoading && <p className="loading-text">Cargando...</p>}
+                  {!isLoading && searchResults.length > 0 && searchResults.map((entity) => (
+                    <button 
+                      key={entity.$id} 
+                      onClick={() => selectProperty(entity)} 
+                      className={`entity-option ${mapping?.propertyId === entity.$id ? 'selected' : ''}`}
+                    >
+                      <span className="entity-label">{entity.label}</span>
+                      {entity.description && (
+                        <span className="entity-desc">{truncate(entity.description, 40)}</span>
                       )}
                     </button>
                   ))}
-                </>
-              )}
-              {!isLoading && searchQuery.length >= 2 && searchResults.length === 0 && (
-                <p className="no-results">No se encontraron propiedades con "{searchQuery}"</p>
-              )}
-              {!isLoading && searchQuery.length === 0 && searchResults.length === 0 && (
-                <p className="no-results">No hay entidades disponibles</p>
-              )}
-            </div>
-            <button className="close-search" onClick={() => setShowSearch(false)}>
-              Cancelar
-            </button>
+                  {!isLoading && searchResults.length === 0 && (
+                    <p className="no-entities">No se encontraron entidades</p>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
-        )}
-      </div>
-      
-      <div className="column-datatype">
-        <select
-          value={mapping?.dataType || "string"}
-          onChange={(e) => onUpdate({ dataType: e.target.value })}
-          disabled={!mapping?.enabled}
-        >
-          {DATA_TYPES.map((dt) => (
-            <option key={dt.id} value={dt.id}>{dt.label}</option>
-          ))}
-        </select>
+        </div>
+        
+        <div className="column-datatype">
+          <select
+            value={mapping?.dataType || "string"}
+            onChange={(e) => onUpdate({ dataType: e.target.value })}
+            disabled={!mapping?.enabled}
+          >
+            {DATA_TYPES.map((dt) => (
+              <option key={dt.id} value={dt.id}>{dt.label}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="column-extras">
+          <button 
+            className={`btn-extras ${(mapping?.qualifiers?.length > 0) ? 'has-items' : ''}`}
+            onClick={() => setShowQualifiers(!showQualifiers)}
+            title="Añadir qualificadores"
+          >
+            {showQualifiers ? '−' : '+'} Q
+            {mapping?.qualifiers?.length > 0 && <span className="extras-count">{mapping.qualifiers.length}</span>}
+          </button>
+          <button 
+            className={`btn-extras btn-refs ${(mapping?.references?.length > 0) ? 'has-items' : ''}`}
+            onClick={() => setShowReferences(!showReferences)}
+            title="Añadir referencias"
+          >
+            {showReferences ? '−' : '+'} R
+            {mapping?.references?.length > 0 && <span className="extras-count">{mapping.references.length}</span>}
+          </button>
+        </div>
       </div>
 
+      {/* Qualificadores expandibles */}
+      {showQualifiers && (
+        <div className="qualifiers-section">
+          <div className="qualifiers-header">
+            <span>Qualificadores (se aplican a cada claim de esta columna)</span>
+            <button className="btn-add-qualifier" onClick={addQualifier}>+ Añadir</button>
+          </div>
+          {(mapping?.qualifiers || []).map((qualifier) => (
+            <QualifierMappingRow
+              key={qualifier.id}
+              qualifier={qualifier}
+              onUpdate={(updates) => updateQualifier(qualifier.id, updates)}
+              onRemove={() => removeQualifier(qualifier.id)}
+              onSearchProperties={onSearchProperties}
+              availableColumns={[]}
+            />
+          ))}
+          {(!mapping?.qualifiers || mapping.qualifiers.length === 0) && (
+            <p className="no-qualifiers">No hay qualificadores definidos</p>
+          )}
+        </div>
+      )}
+
+      {/* Referencias expandibles */}
+      {showReferences && (
+        <div className="references-section">
+          <div className="references-header">
+            <span>Referencias (fuentes de información)</span>
+            <button className="btn-add-reference" onClick={addReference}>+ Añadir</button>
+          </div>
+          {(mapping?.references || []).map((reference) => (
+            <ReferenceMappingRow
+              key={reference.id}
+              reference={reference}
+              onUpdate={(updates) => updateReference(reference.id, updates)}
+              onRemove={() => removeReference(reference.id)}
+              onSearchProperties={onSearchProperties}
+            />
+          ))}
+          {(!mapping?.references || mapping.references.length === 0) && (
+            <p className="no-references">No hay referencias definidas</p>
+          )}
+        </div>
+      )}
+
       <style jsx>{`
+        .column-mapping-row-container {
+          margin-bottom: 0.5rem;
+        }
+
         .column-mapping-row {
           display: grid;
-          grid-template-columns: 40px 1fr 1fr 150px;
-          gap: 1rem;
+          grid-template-columns: 40px 1fr 1.5fr 140px 50px;
+          gap: 0.75rem;
           align-items: center;
           padding: 0.75rem;
           background: var(--color-bg, #f8f9fa);
@@ -2392,15 +2660,17 @@ function ColumnMappingRow({ column, mapping, onUpdate, onSearchProperties, sampl
         .column-name {
           font-weight: 600;
           color: var(--color-text, #202122);
+          font-size: 0.875rem;
         }
 
         .column-samples {
           display: flex;
-          gap: 0.5rem;
+          gap: 0.375rem;
+          flex-wrap: wrap;
         }
 
         .sample-value {
-          font-size: 0.75rem;
+          font-size: 0.6875rem;
           padding: 0.125rem 0.375rem;
           background: var(--color-bg-card, #ffffff);
           border-radius: var(--radius-sm, 2px);
@@ -2411,43 +2681,60 @@ function ColumnMappingRow({ column, mapping, onUpdate, onSearchProperties, sampl
           position: relative;
         }
 
-        .property-new {
-          display: flex;
-          gap: 0.5rem;
+        .property-selector {
+          position: relative;
         }
 
-        .property-new input {
+        .property-input-wrapper {
+          display: flex;
+          align-items: center;
+          gap: 0.25rem;
+        }
+
+        .property-input {
           flex: 1;
           padding: 0.5rem;
           border: 1px solid var(--color-border-light, #c8ccd1);
           border-radius: var(--radius-sm, 2px);
-          font-size: 0.875rem;
+          font-size: 0.8125rem;
         }
 
-        .link-btn, .unlink-btn {
-          background: none;
-          border: none;
-          cursor: pointer;
-          font-size: 1rem;
-          padding: 0.5rem;
-        }
-
-        .property-selected {
-          display: flex;
-          align-items: center;
-          gap: 0.5rem;
+        .property-selected-inline {
+          flex: 1;
           padding: 0.5rem;
           background: rgba(6, 69, 173, 0.1);
           border-radius: var(--radius-sm, 2px);
         }
 
         .property-label {
-          flex: 1;
           font-weight: 500;
           color: var(--color-primary, #0645ad);
+          font-size: 0.8125rem;
         }
 
-        .property-search-dropdown {
+        .btn-toggle-list,
+        .btn-unlink {
+          padding: 0.375rem 0.5rem;
+          border: 1px solid var(--color-border-light, #c8ccd1);
+          background: var(--color-bg-card, #ffffff);
+          border-radius: var(--radius-sm, 2px);
+          cursor: pointer;
+          font-size: 0.75rem;
+        }
+
+        .btn-toggle-list.active {
+          background: var(--color-primary, #0645ad);
+          color: white;
+          border-color: var(--color-primary, #0645ad);
+        }
+
+        .btn-unlink:hover {
+          background: rgba(211, 51, 51, 0.1);
+          border-color: var(--color-error, #d33);
+          color: var(--color-error, #d33);
+        }
+
+        .entities-dropdown {
           position: absolute;
           top: 100%;
           left: 0;
@@ -2455,91 +2742,63 @@ function ColumnMappingRow({ column, mapping, onUpdate, onSearchProperties, sampl
           background: var(--color-bg-card, #ffffff);
           border: 1px solid var(--color-border-light, #c8ccd1);
           border-radius: var(--radius-md, 4px);
-          box-shadow: var(--shadow-lg, 0 4px 16px rgba(0,0,0,0.15));
+          box-shadow: 0 4px 12px rgba(0,0,0,0.15);
           z-index: 100;
-          padding: 0.5rem;
-          min-width: 300px;
+          margin-top: 0.25rem;
         }
 
-        .search-header {
-          padding: 0.5rem;
-          border-bottom: 1px solid var(--color-border-light, #c8ccd1);
-          margin-bottom: 0.5rem;
-        }
-
-        .search-title {
-          font-weight: 600;
-          font-size: 0.875rem;
-          color: var(--color-text, #202122);
-        }
-
-        .property-search-dropdown input {
+        .search-input {
           width: 100%;
-          padding: 0.5rem;
-          border: 1px solid var(--color-border-light, #c8ccd1);
-          border-radius: var(--radius-sm, 2px);
-          margin-bottom: 0.5rem;
+          padding: 0.625rem;
+          border: none;
+          border-bottom: 1px solid var(--color-border-light, #c8ccd1);
+          font-size: 0.8125rem;
         }
 
-        .search-results {
+        .entities-list {
           max-height: 200px;
           overflow-y: auto;
         }
 
-        .loading-results,
-        .results-hint {
-          font-size: 0.75rem;
-          color: var(--color-text-muted, #72777d);
-          padding: 0.25rem 0.5rem;
-          margin: 0;
-        }
-
-        .property-option {
+        .entity-option {
           display: flex;
           flex-direction: column;
           gap: 0.125rem;
           width: 100%;
           text-align: left;
-          padding: 0.625rem 0.5rem;
+          padding: 0.5rem 0.625rem;
           border: none;
           background: none;
           cursor: pointer;
-          border-radius: var(--radius-sm, 2px);
           transition: background 0.15s;
         }
 
-        .property-option:hover {
+        .entity-option:hover {
           background: var(--color-bg-alt, #eaecf0);
         }
 
-        .property-option-label {
+        .entity-option.selected {
+          background: rgba(6, 69, 173, 0.1);
+        }
+
+        .entity-label {
           font-weight: 500;
           color: var(--color-text, #202122);
-          font-size: 0.875rem;
+          font-size: 0.8125rem;
         }
 
-        .property-option-desc {
-          font-size: 0.75rem;
+        .entity-desc {
+          font-size: 0.6875rem;
           color: var(--color-text-muted, #72777d);
         }
 
-        .no-results {
-          font-size: 0.875rem;
-          color: var(--color-text-muted, #72777d);
+        .loading-text,
+        .no-entities {
+          padding: 0.75rem;
           text-align: center;
-          padding: 0.5rem;
+          color: var(--color-text-muted, #72777d);
+          font-size: 0.8125rem;
           margin: 0;
-        }
-
-        .close-search {
-          width: 100%;
-          padding: 0.5rem;
-          margin-top: 0.5rem;
-          background: none;
-          border: 1px solid var(--color-border-light, #c8ccd1);
-          border-radius: var(--radius-sm, 2px);
-          cursor: pointer;
-          font-size: 0.875rem;
         }
 
         .column-datatype select {
@@ -2547,8 +2806,133 @@ function ColumnMappingRow({ column, mapping, onUpdate, onSearchProperties, sampl
           padding: 0.5rem;
           border: 1px solid var(--color-border-light, #c8ccd1);
           border-radius: var(--radius-sm, 2px);
-          font-size: 0.875rem;
+          font-size: 0.8125rem;
           background: var(--color-bg-card, #ffffff);
+        }
+
+        .column-extras {
+          display: flex;
+          justify-content: center;
+          gap: 0.25rem;
+        }
+
+        .btn-extras {
+          padding: 0.375rem 0.5rem;
+          border: 1px solid var(--color-border-light, #c8ccd1);
+          background: var(--color-bg-card, #ffffff);
+          border-radius: var(--radius-sm, 2px);
+          cursor: pointer;
+          font-size: 0.75rem;
+          font-weight: 600;
+          color: var(--color-text-secondary, #54595d);
+          position: relative;
+        }
+
+        .btn-extras.btn-refs {
+          color: var(--color-success, #14866d);
+        }
+
+        .btn-extras:hover {
+          background: var(--color-bg-alt, #eaecf0);
+        }
+
+        .btn-extras.has-items {
+          background: rgba(6, 69, 173, 0.1);
+          border-color: var(--color-primary, #0645ad);
+          color: var(--color-primary, #0645ad);
+        }
+
+        .btn-extras.btn-refs.has-items {
+          background: rgba(20, 134, 109, 0.1);
+          border-color: var(--color-success, #14866d);
+          color: var(--color-success, #14866d);
+        }
+
+        .extras-count {
+          position: absolute;
+          top: -6px;
+          right: -6px;
+          background: var(--color-primary, #0645ad);
+          color: white;
+          font-size: 0.625rem;
+          width: 16px;
+          height: 16px;
+          border-radius: 50%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+
+        .qualifiers-section {
+          margin-left: 40px;
+          margin-top: 0.5rem;
+          padding: 0.75rem;
+          background: var(--color-bg-card, #ffffff);
+          border: 1px dashed var(--color-border-light, #c8ccd1);
+          border-radius: var(--radius-md, 4px);
+        }
+
+        .qualifiers-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 0.5rem;
+          font-size: 0.75rem;
+          color: var(--color-text-secondary, #54595d);
+        }
+
+        .btn-add-qualifier {
+          padding: 0.25rem 0.5rem;
+          border: 1px solid var(--color-primary, #0645ad);
+          background: none;
+          color: var(--color-primary, #0645ad);
+          border-radius: var(--radius-sm, 2px);
+          cursor: pointer;
+          font-size: 0.75rem;
+        }
+
+        .no-qualifiers {
+          font-size: 0.75rem;
+          color: var(--color-text-muted, #72777d);
+          text-align: center;
+          padding: 0.5rem;
+          margin: 0;
+        }
+
+        .references-section {
+          margin-left: 40px;
+          margin-top: 0.5rem;
+          padding: 0.75rem;
+          background: rgba(20, 134, 109, 0.05);
+          border: 1px dashed var(--color-success, #14866d);
+          border-radius: var(--radius-md, 4px);
+        }
+
+        .references-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 0.5rem;
+          font-size: 0.75rem;
+          color: var(--color-success, #14866d);
+        }
+
+        .btn-add-reference {
+          padding: 0.25rem 0.5rem;
+          border: 1px solid var(--color-success, #14866d);
+          background: none;
+          color: var(--color-success, #14866d);
+          border-radius: var(--radius-sm, 2px);
+          cursor: pointer;
+          font-size: 0.75rem;
+        }
+
+        .no-references {
+          font-size: 0.75rem;
+          color: var(--color-text-muted, #72777d);
+          text-align: center;
+          padding: 0.5rem;
+          margin: 0;
         }
 
         @media (max-width: 768px) {
@@ -2562,34 +2946,767 @@ function ColumnMappingRow({ column, mapping, onUpdate, onSearchProperties, sampl
   );
 }
 
-// Componente para claim estático
-function StaticClaimRow({ claim, onUpdate, onRemove, onSearchProperties }) {
-  const [searchQuery, setSearchQuery] = useState("");
+// Componente para qualificador en mapeo
+function QualifierMappingRow({ qualifier, onUpdate, onRemove, onSearchProperties, availableColumns }) {
   const [searchResults, setSearchResults] = useState([]);
   const [showSearch, setShowSearch] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  
+  // Estado para selector de valor tipo entidad
+  const [valueEntities, setValueEntities] = useState([]);
+  const [valueSearch, setValueSearch] = useState("");
+  const [showValueDropdown, setShowValueDropdown] = useState(false);
+
+  async function loadEntities() {
+    setIsLoading(true);
+    try {
+      const results = await onSearchProperties("");
+      setSearchResults(results);
+    } catch (err) {
+      console.error("Error loading entities:", err);
+    }
+    setIsLoading(false);
+  }
 
   async function handleSearch(query) {
     setSearchQuery(query);
-    if (query.length >= 2) {
+    setIsLoading(true);
+    try {
       const results = await onSearchProperties(query);
       setSearchResults(results);
-    } else {
+    } catch (err) {
       setSearchResults([]);
+    }
+    setIsLoading(false);
+  }
+
+  async function handleValueSearch(query) {
+    setValueSearch(query);
+    try {
+      const results = await onSearchProperties(query);
+      setValueEntities(results);
+    } catch (err) {
+      setValueEntities([]);
     }
   }
 
-  function selectProperty(property) {
+  function selectProperty(entity) {
     onUpdate({
-      propertyId: property.$id,
-      propertyLabel: property.label,
+      propertyId: entity.$id,
+      propertyLabel: entity.label,
       createProperty: false,
     });
     setShowSearch(false);
     setSearchQuery("");
   }
 
+  function selectValueEntity(entity) {
+    onUpdate({
+      value: entity.$id,
+      valueLabel: entity.label,
+    });
+    setShowValueDropdown(false);
+    setValueSearch("");
+  }
+
+  function renderValueInput() {
+    if (qualifier.dataType === "entity") {
+      return (
+        <div className="entity-value-container">
+          {qualifier.value ? (
+            <div className="entity-value-selected">
+              <span>{qualifier.valueLabel || qualifier.value}</span>
+              <button className="btn-clear" onClick={() => onUpdate({ value: "", valueLabel: "" })}>✕</button>
+            </div>
+          ) : (
+            <button 
+              className="btn-select-entity"
+              onClick={async () => {
+                setShowValueDropdown(true);
+                const results = await onSearchProperties("");
+                setValueEntities(results);
+              }}
+            >
+              Seleccionar...
+            </button>
+          )}
+          
+          {showValueDropdown && (
+            <div className="entities-mini-dropdown value-dropdown">
+              <input
+                type="text"
+                value={valueSearch}
+                onChange={(e) => handleValueSearch(e.target.value)}
+                placeholder="Buscar..."
+                className="mini-search"
+                autoFocus
+              />
+              <div className="mini-list">
+                {valueEntities.map((e) => (
+                  <button key={e.$id} onClick={() => selectValueEntity(e)} className="mini-option">
+                    {e.label}
+                  </button>
+                ))}
+              </div>
+              <button className="mini-close" onClick={() => setShowValueDropdown(false)}>Cerrar</button>
+            </div>
+          )}
+        </div>
+      );
+    }
+    
+    return (
+      <input
+        type="text"
+        value={qualifier.value || ""}
+        onChange={(e) => onUpdate({ value: e.target.value })}
+        placeholder="Valor"
+        className="qualifier-value"
+      />
+    );
+  }
+
+  return (
+    <div className="qualifier-row">
+      <div className="qualifier-property">
+        <div className="property-input-group">
+          {qualifier.createProperty ? (
+            <input
+              type="text"
+              value={qualifier.propertyLabel}
+              onChange={(e) => onUpdate({ propertyLabel: e.target.value })}
+              placeholder="Propiedad del qualificador"
+              className="qualifier-input"
+            />
+          ) : (
+            <div className="qualifier-selected">
+              <span>{qualifier.propertyLabel}</span>
+            </div>
+          )}
+          <button 
+            className="btn-sm"
+            onClick={() => {
+              if (!showSearch) loadEntities();
+              setShowSearch(!showSearch);
+            }}
+          >
+            {showSearch ? '−' : '▼'}
+          </button>
+          {!qualifier.createProperty && (
+            <button 
+              className="btn-sm btn-unlink"
+              onClick={() => onUpdate({ propertyId: null, createProperty: true })}
+            >
+              ✕
+            </button>
+          )}
+        </div>
+        
+        {showSearch && (
+          <div className="entities-mini-dropdown">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => handleSearch(e.target.value)}
+              placeholder="Buscar..."
+              className="mini-search"
+            />
+            <div className="mini-list">
+              {isLoading && <span className="mini-loading">Cargando...</span>}
+              {!isLoading && searchResults.map((e) => (
+                <button key={e.$id} onClick={() => selectProperty(e)} className="mini-option">
+                  {e.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <select
+        value={qualifier.dataType}
+        onChange={(e) => onUpdate({ dataType: e.target.value, value: "", valueLabel: "" })}
+        className="qualifier-type"
+      >
+        {DATA_TYPES.map((dt) => (
+          <option key={dt.id} value={dt.id}>{dt.label}</option>
+        ))}
+      </select>
+
+      {renderValueInput()}
+
+      <button className="btn-remove" onClick={onRemove}>🗑️</button>
+
+      <style jsx>{`
+        .qualifier-row {
+          display: grid;
+          grid-template-columns: 1.5fr 120px 1fr 32px;
+          gap: 0.5rem;
+          align-items: start;
+          padding: 0.5rem;
+          background: var(--color-bg, #f8f9fa);
+          border-radius: var(--radius-sm, 2px);
+          margin-bottom: 0.375rem;
+        }
+
+        .qualifier-property {
+          position: relative;
+        }
+
+        .property-input-group {
+          display: flex;
+          gap: 0.25rem;
+        }
+
+        .qualifier-input,
+        .qualifier-selected {
+          flex: 1;
+          padding: 0.375rem 0.5rem;
+          font-size: 0.75rem;
+          border: 1px solid var(--color-border-light, #c8ccd1);
+          border-radius: var(--radius-sm, 2px);
+        }
+
+        .qualifier-selected {
+          background: rgba(6, 69, 173, 0.1);
+          color: var(--color-primary, #0645ad);
+          font-weight: 500;
+        }
+
+        .btn-sm {
+          padding: 0.25rem 0.5rem;
+          border: 1px solid var(--color-border-light, #c8ccd1);
+          background: var(--color-bg-card, #ffffff);
+          border-radius: var(--radius-sm, 2px);
+          cursor: pointer;
+          font-size: 0.6875rem;
+        }
+
+        .btn-sm.btn-unlink:hover {
+          color: var(--color-error, #d33);
+        }
+
+        .entities-mini-dropdown {
+          position: absolute;
+          top: 100%;
+          left: 0;
+          right: 0;
+          background: var(--color-bg-card, #ffffff);
+          border: 1px solid var(--color-border-light, #c8ccd1);
+          border-radius: var(--radius-sm, 2px);
+          box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+          z-index: 50;
+          margin-top: 0.25rem;
+        }
+
+        .mini-search {
+          width: 100%;
+          padding: 0.375rem;
+          border: none;
+          border-bottom: 1px solid var(--color-border-light, #c8ccd1);
+          font-size: 0.75rem;
+        }
+
+        .mini-list {
+          max-height: 120px;
+          overflow-y: auto;
+        }
+
+        .mini-loading {
+          display: block;
+          padding: 0.5rem;
+          font-size: 0.6875rem;
+          color: var(--color-text-muted, #72777d);
+        }
+
+        .mini-option {
+          display: block;
+          width: 100%;
+          text-align: left;
+          padding: 0.375rem 0.5rem;
+          border: none;
+          background: none;
+          cursor: pointer;
+          font-size: 0.75rem;
+        }
+
+        .mini-option:hover {
+          background: var(--color-bg-alt, #eaecf0);
+        }
+
+        .qualifier-type,
+        .qualifier-value {
+          padding: 0.375rem 0.5rem;
+          font-size: 0.75rem;
+          border: 1px solid var(--color-border-light, #c8ccd1);
+          border-radius: var(--radius-sm, 2px);
+        }
+
+        .entity-value-container {
+          position: relative;
+        }
+
+        .entity-value-selected {
+          display: flex;
+          align-items: center;
+          gap: 0.25rem;
+          padding: 0.375rem 0.5rem;
+          background: rgba(6, 69, 173, 0.1);
+          border-radius: var(--radius-sm, 2px);
+          font-size: 0.75rem;
+        }
+
+        .entity-value-selected span {
+          flex: 1;
+          color: var(--color-primary, #0645ad);
+          font-weight: 500;
+        }
+
+        .btn-clear {
+          background: none;
+          border: none;
+          cursor: pointer;
+          font-size: 0.625rem;
+          opacity: 0.6;
+          padding: 0;
+        }
+
+        .btn-clear:hover {
+          opacity: 1;
+        }
+
+        .btn-select-entity {
+          width: 100%;
+          padding: 0.375rem 0.5rem;
+          background: var(--color-bg-card, #ffffff);
+          border: 1px dashed var(--color-border-light, #c8ccd1);
+          border-radius: var(--radius-sm, 2px);
+          cursor: pointer;
+          font-size: 0.75rem;
+          color: var(--color-text-muted, #72777d);
+        }
+
+        .btn-select-entity:hover {
+          border-color: var(--color-primary, #0645ad);
+          color: var(--color-primary, #0645ad);
+        }
+
+        .value-dropdown {
+          z-index: 60;
+        }
+
+        .mini-close {
+          width: 100%;
+          padding: 0.375rem;
+          border: none;
+          border-top: 1px solid var(--color-border-light, #c8ccd1);
+          background: none;
+          cursor: pointer;
+          font-size: 0.6875rem;
+          color: var(--color-text-muted, #72777d);
+        }
+
+        .btn-remove {
+          padding: 0.25rem;
+          border: none;
+          background: none;
+          cursor: pointer;
+          font-size: 0.875rem;
+          opacity: 0.6;
+        }
+
+        .btn-remove:hover {
+          opacity: 1;
+        }
+      `}</style>
+    </div>
+  );
+}
+
+// Componente para referencia en mapeo
+function ReferenceMappingRow({ reference, onUpdate, onRemove, onSearchProperties }) {
+  const [searchResults, setSearchResults] = useState([]);
+  const [showSearch, setShowSearch] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+
+  async function loadEntities() {
+    setIsLoading(true);
+    try {
+      const results = await onSearchProperties("");
+      setSearchResults(results);
+    } catch (err) {
+      console.error("Error loading entities:", err);
+    }
+    setIsLoading(false);
+  }
+
+  async function handleSearch(query) {
+    setSearchQuery(query);
+    setIsLoading(true);
+    try {
+      const results = await onSearchProperties(query);
+      setSearchResults(results);
+    } catch (err) {
+      setSearchResults([]);
+    }
+    setIsLoading(false);
+  }
+
+  function selectEntity(entity) {
+    onUpdate({
+      referenceId: entity.$id,
+      referenceLabel: entity.label,
+      createReference: false,
+    });
+    setShowSearch(false);
+    setSearchQuery("");
+  }
+
+  return (
+    <div className="reference-row">
+      <div className="reference-entity">
+        <div className="ref-input-group">
+          {reference.createReference ? (
+            <input
+              type="text"
+              value={reference.referenceLabel}
+              onChange={(e) => onUpdate({ referenceLabel: e.target.value })}
+              placeholder="Nueva referencia o URL"
+              className="reference-input"
+            />
+          ) : (
+            <div className="reference-selected">
+              <span>{reference.referenceLabel}</span>
+            </div>
+          )}
+          <button 
+            className="btn-sm"
+            onClick={() => {
+              if (!showSearch) loadEntities();
+              setShowSearch(!showSearch);
+            }}
+            title="Seleccionar entidad existente"
+          >
+            {showSearch ? '−' : '▼'}
+          </button>
+          {!reference.createReference && (
+            <button 
+              className="btn-sm btn-unlink"
+              onClick={() => onUpdate({ referenceId: null, createReference: true })}
+            >
+              ✕
+            </button>
+          )}
+        </div>
+        
+        {showSearch && (
+          <div className="entities-mini-dropdown">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => handleSearch(e.target.value)}
+              placeholder="Buscar entidad..."
+              className="mini-search"
+            />
+            <div className="mini-list">
+              {isLoading && <span className="mini-loading">Cargando...</span>}
+              {!isLoading && searchResults.map((e) => (
+                <button key={e.$id} onClick={() => selectEntity(e)} className="mini-option">
+                  {e.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <input
+        type="text"
+        value={reference.details || ""}
+        onChange={(e) => onUpdate({ details: e.target.value })}
+        placeholder="Detalles (ej: página, fecha consultada)"
+        className="reference-details"
+      />
+
+      <button className="btn-remove" onClick={onRemove}>🗑️</button>
+
+      <style jsx>{`
+        .reference-row {
+          display: grid;
+          grid-template-columns: 1.5fr 1fr 32px;
+          gap: 0.5rem;
+          align-items: start;
+          padding: 0.5rem;
+          background: var(--color-bg, #f8f9fa);
+          border-radius: var(--radius-sm, 2px);
+          margin-bottom: 0.375rem;
+        }
+
+        .reference-entity {
+          position: relative;
+        }
+
+        .ref-input-group {
+          display: flex;
+          gap: 0.25rem;
+        }
+
+        .reference-input,
+        .reference-selected {
+          flex: 1;
+          padding: 0.375rem 0.5rem;
+          font-size: 0.75rem;
+          border: 1px solid var(--color-border-light, #c8ccd1);
+          border-radius: var(--radius-sm, 2px);
+        }
+
+        .reference-selected {
+          background: rgba(6, 69, 173, 0.1);
+          color: var(--color-primary, #0645ad);
+          font-weight: 500;
+        }
+
+        .reference-details {
+          padding: 0.375rem 0.5rem;
+          font-size: 0.75rem;
+          border: 1px solid var(--color-border-light, #c8ccd1);
+          border-radius: var(--radius-sm, 2px);
+        }
+
+        .btn-sm {
+          padding: 0.25rem 0.5rem;
+          border: 1px solid var(--color-border-light, #c8ccd1);
+          background: var(--color-bg-card, #ffffff);
+          border-radius: var(--radius-sm, 2px);
+          cursor: pointer;
+          font-size: 0.6875rem;
+        }
+
+        .btn-sm.btn-unlink:hover {
+          color: var(--color-error, #d33);
+        }
+
+        .entities-mini-dropdown {
+          position: absolute;
+          top: 100%;
+          left: 0;
+          right: 0;
+          background: var(--color-bg-card, #ffffff);
+          border: 1px solid var(--color-border-light, #c8ccd1);
+          border-radius: var(--radius-sm, 2px);
+          box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+          z-index: 50;
+          margin-top: 0.25rem;
+        }
+
+        .mini-search {
+          width: 100%;
+          padding: 0.375rem;
+          border: none;
+          border-bottom: 1px solid var(--color-border-light, #c8ccd1);
+          font-size: 0.75rem;
+        }
+
+        .mini-list {
+          max-height: 120px;
+          overflow-y: auto;
+        }
+
+        .mini-loading {
+          display: block;
+          padding: 0.5rem;
+          font-size: 0.6875rem;
+          color: var(--color-text-muted, #72777d);
+        }
+
+        .mini-option {
+          display: block;
+          width: 100%;
+          text-align: left;
+          padding: 0.375rem 0.5rem;
+          border: none;
+          background: none;
+          cursor: pointer;
+          font-size: 0.75rem;
+        }
+
+        .mini-option:hover {
+          background: var(--color-bg-alt, #eaecf0);
+        }
+
+        .btn-remove {
+          padding: 0.25rem;
+          border: none;
+          background: none;
+          cursor: pointer;
+          font-size: 0.875rem;
+          opacity: 0.6;
+        }
+
+        .btn-remove:hover {
+          opacity: 1;
+        }
+      `}</style>
+    </div>
+  );
+}
+
+// Componente para claim estático
+function StaticClaimRow({ claim, onUpdate, onRemove }) {
+  const [entities, setEntities] = useState([]);
+  const [entitySearch, setEntitySearch] = useState("");
+  const [showEntityDropdown, setShowEntityDropdown] = useState(false);
+  const [loadingEntities, setLoadingEntities] = useState(false);
+  
+  // Estado para selector de valor tipo entidad
+  const [valueEntities, setValueEntities] = useState([]);
+  const [valueEntitySearch, setValueEntitySearch] = useState("");
+  const [showValueEntityDropdown, setShowValueEntityDropdown] = useState(false);
+
+  // Cargar entidades al montar
+  useEffect(() => {
+    async function loadInitialEntities() {
+      setLoadingEntities(true);
+      try {
+        const result = await database.listEntities(100, 0);
+        setEntities(result.rows || []);
+      } catch (err) {
+        console.error("Error loading entities:", err);
+      } finally {
+        setLoadingEntities(false);
+      }
+    }
+    loadInitialEntities();
+  }, []);
+
+  // Buscar entidades para el valor
+  async function searchValueEntities(query) {
+    setValueEntitySearch(query);
+    if (query.length >= 2) {
+      try {
+        const result = await database.searchEntities(query, 50, 0);
+        setValueEntities(result.rows || []);
+      } catch (err) {
+        console.error("Error searching entities:", err);
+        setValueEntities([]);
+      }
+    } else if (query.length === 0) {
+      try {
+        const result = await database.listEntities(50, 0);
+        setValueEntities(result.rows || []);
+      } catch (err) {
+        console.error("Error listing entities:", err);
+        setValueEntities([]);
+      }
+    }
+  }
+
+  function selectProperty(entity) {
+    onUpdate({
+      propertyId: entity.$id,
+      propertyLabel: entity.label,
+      createProperty: false,
+    });
+    setShowEntityDropdown(false);
+    setEntitySearch("");
+  }
+
+  function selectValueEntity(entity) {
+    onUpdate({ 
+      value: entity.$id,
+      valueLabel: entity.label 
+    });
+    setShowValueEntityDropdown(false);
+    setValueEntitySearch("");
+  }
+
+  const filteredEntities = entitySearch.length >= 2
+    ? entities.filter(e => e.label?.toLowerCase().includes(entitySearch.toLowerCase()))
+    : entities;
+
+  // Buscar entidades para la propiedad
+  async function handlePropertySearch(query) {
+    setEntitySearch(query);
+    if (query.length >= 2) {
+      setLoadingEntities(true);
+      try {
+        const result = await database.searchEntities(query, 50, 0);
+        setEntities(result.rows || []);
+      } catch (err) {
+        console.error("Error searching entities:", err);
+      } finally {
+        setLoadingEntities(false);
+      }
+    }
+  }
+
   function renderValueInput() {
     switch (claim.dataType) {
+      case "entity":
+        return (
+          <div className="entity-value-selector">
+            {claim.value ? (
+              <div className="selected-entity-value">
+                <span>{claim.valueLabel || claim.value}</span>
+                <button 
+                  className="clear-btn"
+                  onClick={() => onUpdate({ value: "", valueLabel: "" })}
+                >
+                  ✕
+                </button>
+              </div>
+            ) : (
+              <button 
+                className="select-entity-btn"
+                onClick={async () => {
+                  setShowValueEntityDropdown(true);
+                  try {
+                    const result = await database.listEntities(50, 0);
+                    setValueEntities(result.rows || []);
+                  } catch (err) {
+                    console.error("Error loading entities:", err);
+                  }
+                }}
+              >
+                Seleccionar entidad...
+              </button>
+            )}
+            
+            {showValueEntityDropdown && (
+              <div className="entity-dropdown">
+                <input
+                  type="text"
+                  value={valueEntitySearch}
+                  onChange={(e) => searchValueEntities(e.target.value)}
+                  placeholder="Buscar entidad..."
+                  autoFocus
+                />
+                <div className="entity-list">
+                  {valueEntities.map((entity) => (
+                    <button
+                      key={entity.$id}
+                      className="entity-option"
+                      onClick={() => selectValueEntity(entity)}
+                    >
+                      {entity.label}
+                    </button>
+                  ))}
+                  {valueEntitySearch.length >= 2 && valueEntities.length === 0 && (
+                    <p className="no-results">No se encontraron entidades</p>
+                  )}
+                </div>
+                <button 
+                  className="close-dropdown"
+                  onClick={() => setShowValueEntityDropdown(false)}
+                >
+                  Cerrar
+                </button>
+              </div>
+            )}
+          </div>
+        );
       case "boolean":
         return (
           <select
@@ -2662,8 +3779,8 @@ function StaticClaimRow({ claim, onUpdate, onRemove, onSearchProperties }) {
             />
             <button 
               className="link-btn"
-              onClick={() => setShowSearch(true)}
-              title="Buscar propiedad existente"
+              onClick={() => setShowEntityDropdown(true)}
+              title="Seleccionar de entidades existentes"
             >
               🔗
             </button>
@@ -2681,26 +3798,35 @@ function StaticClaimRow({ claim, onUpdate, onRemove, onSearchProperties }) {
           </div>
         )}
         
-        {showSearch && (
+        {showEntityDropdown && (
           <div className="property-search-dropdown">
             <input
               type="text"
-              value={searchQuery}
-              onChange={(e) => handleSearch(e.target.value)}
-              placeholder="Buscar propiedad..."
+              value={entitySearch}
+              onChange={(e) => handlePropertySearch(e.target.value)}
+              placeholder="Buscar entidad..."
               autoFocus
             />
             <div className="search-results">
-              {searchResults.map((p) => (
-                <button key={p.$id} onClick={() => selectProperty(p)}>
-                  {p.label}
-                </button>
-              ))}
-              {searchQuery.length >= 2 && searchResults.length === 0 && (
-                <p className="no-results">No se encontraron propiedades</p>
+              {loadingEntities ? (
+                <p className="loading-msg">Cargando...</p>
+              ) : (
+                <>
+                  {entities.slice(0, 30).map((entity) => (
+                    <button key={entity.$id} onClick={() => selectProperty(entity)}>
+                      {entity.label}
+                    </button>
+                  ))}
+                  {entitySearch.length >= 2 && entities.length === 0 && (
+                    <p className="no-results">No se encontraron entidades</p>
+                  )}
+                  {entities.length > 30 && (
+                    <p className="more-results">+{entities.length - 30} más...</p>
+                  )}
+                </>
               )}
             </div>
-            <button className="close-search" onClick={() => setShowSearch(false)}>
+            <button className="close-search" onClick={() => setShowEntityDropdown(false)}>
               Cancelar
             </button>
           </div>
@@ -2710,9 +3836,9 @@ function StaticClaimRow({ claim, onUpdate, onRemove, onSearchProperties }) {
       <div className="claim-datatype">
         <select
           value={claim.dataType}
-          onChange={(e) => onUpdate({ dataType: e.target.value, value: "" })}
+          onChange={(e) => onUpdate({ dataType: e.target.value, value: "", valueLabel: "" })}
         >
-          {DATA_TYPES.filter(dt => dt.id !== "entity").map((dt) => (
+          {DATA_TYPES.map((dt) => (
             <option key={dt.id} value={dt.id}>{dt.label}</option>
           ))}
         </select>
@@ -2866,6 +3992,116 @@ function StaticClaimRow({ claim, onUpdate, onRemove, onSearchProperties }) {
 
         .remove-btn:hover {
           opacity: 1;
+        }
+
+        .loading-msg, .more-results {
+          font-size: 0.75rem;
+          color: var(--color-text-muted, #72777d);
+          text-align: center;
+          padding: 0.5rem;
+        }
+
+        .entity-value-selector {
+          position: relative;
+        }
+
+        .selected-entity-value {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          padding: 0.5rem;
+          background: rgba(6, 69, 173, 0.1);
+          border-radius: var(--radius-sm, 2px);
+          font-size: 0.875rem;
+        }
+
+        .selected-entity-value span {
+          flex: 1;
+          color: var(--color-primary, #0645ad);
+          font-weight: 500;
+        }
+
+        .selected-entity-value .clear-btn {
+          background: none;
+          border: none;
+          cursor: pointer;
+          font-size: 0.875rem;
+          opacity: 0.6;
+          padding: 0;
+        }
+
+        .selected-entity-value .clear-btn:hover {
+          opacity: 1;
+        }
+
+        .select-entity-btn {
+          width: 100%;
+          padding: 0.5rem;
+          background: var(--color-bg-card, #ffffff);
+          border: 1px dashed var(--color-border-light, #c8ccd1);
+          border-radius: var(--radius-sm, 2px);
+          cursor: pointer;
+          font-size: 0.875rem;
+          color: var(--color-text-muted, #72777d);
+        }
+
+        .select-entity-btn:hover {
+          border-color: var(--color-primary, #0645ad);
+          color: var(--color-primary, #0645ad);
+        }
+
+        .entity-dropdown {
+          position: absolute;
+          top: 100%;
+          left: 0;
+          right: 0;
+          background: var(--color-bg-card, #ffffff);
+          border: 1px solid var(--color-border-light, #c8ccd1);
+          border-radius: var(--radius-md, 4px);
+          box-shadow: var(--shadow-lg, 0 4px 16px rgba(0,0,0,0.15));
+          z-index: 100;
+          padding: 0.5rem;
+        }
+
+        .entity-dropdown input {
+          width: 100%;
+          padding: 0.5rem;
+          border: 1px solid var(--color-border-light, #c8ccd1);
+          border-radius: var(--radius-sm, 2px);
+          margin-bottom: 0.5rem;
+          font-size: 0.875rem;
+        }
+
+        .entity-list {
+          max-height: 150px;
+          overflow-y: auto;
+        }
+
+        .entity-option {
+          display: block;
+          width: 100%;
+          text-align: left;
+          padding: 0.5rem;
+          border: none;
+          background: none;
+          cursor: pointer;
+          border-radius: var(--radius-sm, 2px);
+          font-size: 0.875rem;
+        }
+
+        .entity-option:hover {
+          background: var(--color-bg-alt, #eaecf0);
+        }
+
+        .close-dropdown {
+          width: 100%;
+          padding: 0.5rem;
+          margin-top: 0.5rem;
+          background: none;
+          border: 1px solid var(--color-border-light, #c8ccd1);
+          border-radius: var(--radius-sm, 2px);
+          cursor: pointer;
+          font-size: 0.875rem;
         }
 
         @media (max-width: 768px) {

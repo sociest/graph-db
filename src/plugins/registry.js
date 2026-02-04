@@ -19,6 +19,7 @@ class PluginRegistry {
    * @param {Function} plugin.render - Función de renderizado (recibe value, options)
    * @param {Function} plugin.preview - Función de preview corto (opcional)
    * @param {number} plugin.priority - Prioridad del plugin (mayor = más prioritario)
+   * @param {Object} plugin.storage - Configuración de almacenamiento en bucket (opcional)
    */
   register(plugin) {
     if (!plugin.datatypes || !Array.isArray(plugin.datatypes)) {
@@ -39,6 +40,7 @@ class PluginRegistry {
       preview: plugin.preview || plugin.render,
       priority: plugin.priority || 0,
       options: plugin.options || {},
+      storage: plugin.storage || null,
     };
 
     for (const datatype of plugin.datatypes) {
@@ -146,6 +148,42 @@ class PluginRegistry {
       }
     }
     return datatypes;
+  }
+
+  /**
+   * Obtiene la configuración de storage para un datatype
+   * @param {string} datatype - Tipo de dato
+   * @returns {Object|null} Configuración de storage o null
+   */
+  getStorageConfig(datatype) {
+    const plugin = this.getPlugin(datatype);
+    return plugin?.storage || null;
+  }
+
+  /**
+   * Determina si un valor debe subirse a bucket según la configuración del plugin
+   * @param {string} datatype - Tipo de dato
+   * @param {string|Object} value - Valor a evaluar
+   * @returns {boolean}
+   */
+  shouldUploadToBucket(datatype, value) {
+    const storageConfig = this.getStorageConfig(datatype);
+    if (!storageConfig) return false;
+    
+    const valueStr = typeof value === "string" ? value : JSON.stringify(value);
+    const maxChars = storageConfig.maxInlineChars || storageConfig.maxSizeBytes || 10000;
+    
+    return valueStr.length > maxChars;
+  }
+
+  /**
+   * Obtiene el bucketId para un datatype
+   * @param {string} datatype - Tipo de dato
+   * @returns {string|null}
+   */
+  getBucketId(datatype) {
+    const storageConfig = this.getStorageConfig(datatype);
+    return storageConfig?.bucketId || null;
   }
 }
 

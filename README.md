@@ -82,9 +82,28 @@ NEXT_PUBLIC_APPWRITE_PROJECT_ID=your-project-id
 NEXT_PUBLIC_APPWRITE_DATABASE_ID=your-database-id
 NEXT_PUBLIC_AUTH_ENABLED=true
 NEXT_PUBLIC_MAIN_TEAM_ID=main
+
+# Storage Buckets (opcional - para datos grandes como GeoJSON, imágenes, etc.)
+NEXT_PUBLIC_BUCKET_IMAGES=images
+NEXT_PUBLIC_BUCKET_GEOJSON=geojson
+NEXT_PUBLIC_BUCKET_JSON=json
+NEXT_PUBLIC_BUCKET_FILES=files
 ```
 
 > **Nota:** `NEXT_PUBLIC_MAIN_TEAM_ID` es el ID del equipo principal de administradores. Los miembros de este equipo tienen permisos de administrador automáticamente.
+
+### Storage Buckets
+
+Para almacenar datos grandes (GeoJSON, imágenes, JSON extensos), la aplicación utiliza Appwrite Storage. Crea los siguientes buckets en tu proyecto Appwrite:
+
+| Bucket ID | Descripción | Tipos MIME |
+|-----------|-------------|------------|
+| `images` | Imágenes subidas | image/jpeg, image/png, image/gif, image/webp |
+| `geojson` | Archivos GeoJSON grandes | application/geo+json, application/json |
+| `json` | JSON genéricos grandes | application/json |
+| `files` | Archivos generales | * |
+
+Los datos se suben automáticamente a buckets cuando superan el umbral de 10KB caracteres.
 
 ## 🔐 Permissions System
 
