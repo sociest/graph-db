@@ -636,7 +636,7 @@ export default function ImportPage() {
                 value_relation: relationId,
               };
             } else {
-              // Para otros tipos de datos, usar value_raw con el formato {datatype, value}
+              // Para otros tipos de datos, usar value_raw con el formato {datatype, data}
               // Usar formatValueWithUpload para subir datos grandes a bucket
               const formattedValue = await formatValueWithUpload(value, mapping.dataType, label, teamId);
               claimData = {
@@ -644,7 +644,7 @@ export default function ImportPage() {
                 property: propertyId,
                 value_raw: {
                   datatype: mapping.dataType,
-                  value: formattedValue,
+                  data: formattedValue,
                 },
               };
             }
@@ -673,7 +673,7 @@ export default function ImportPage() {
                       property: qualifier.propertyId,
                       value_raw: {
                         datatype: qualifier.dataType,
-                        value: formattedQualValue,
+                        data: formattedQualValue,
                       },
                     };
                   }
@@ -745,7 +745,7 @@ export default function ImportPage() {
                 property: staticPropertyId,
                 value_raw: {
                   datatype: claim.dataType,
-                  value: formattedValue,
+                  data: formattedValue,
                 },
               };
             }

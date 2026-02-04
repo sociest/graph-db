@@ -1,4 +1,5 @@
 import Providers from "./providers";
+import "leaflet/dist/leaflet.css";
 
 export const metadata = {
   title: "Graph DB Explorer",

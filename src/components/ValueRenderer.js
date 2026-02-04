@@ -1,6 +1,17 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import registry from "@/plugins";
+
+// Cargar MiniMap dinámicamente para evitar SSR issues con Leaflet
+const MiniMap = dynamic(() => import("./MiniMap"), { 
+  ssr: false,
+  loading: () => (
+    <div className="mini-map-placeholder" style={{ height: 150, backgroundColor: "#f0f0f0", borderRadius: "4px" }}>
+      <span>Cargando mapa...</span>
+    </div>
+  ),
+});
 
 /**
  * Renderiza un valor usando el sistema de plugins
@@ -56,11 +67,67 @@ function renderSpecialType(data, compact) {
       );
 
     case "geometry":
+      // Si es compacto, solo mostrar texto
+      if (compact) {
+        return (
+          <span className="value-geometry">
+            <span className="icon-map-pin"></span>
+            <span>{data.geometryType} ({data.pointCount} puntos)</span>
+          </span>
+        );
+      }
+      // En modo completo, mostrar el mapa
       return (
-        <span className="value-geometry">
-          <span className="icon-map-pin"></span>
-          <span>{data.geometryType} ({data.pointCount} puntos)</span>
-        </span>
+        <div className="value-geometry-map">
+          <MiniMap
+            coordinates={data.coordinates}
+            geometryType={data.geometryType}
+            center={data.center}
+            bounds={data.bounds}
+            height={180}
+          />
+          <div className="geometry-info">
+            <span className="icon-map-pin"></span>
+            <span>{data.geometryType} ({data.pointCount} puntos)</span>
+          </div>
+        </div>
+      );
+
+    case "geometry-file":
+      // Geometría almacenada como archivo en bucket
+      if (compact) {
+        return (
+          <span className="value-geometry">
+            <span className="icon-file"></span>
+            <span>📁 GeoJSON (archivo)</span>
+          </span>
+        );
+      }
+      // Mostrar mapa cargando el GeoJSON desde la URL
+      return (
+        <div className="value-geometry-map">
+          <MiniMap
+            fileUrl={data.url}
+            geometryType={data.geometryType}
+            height={180}
+          />
+          <div className="geometry-info">
+            <span className="icon-map-pin"></span>
+            <span>GeoJSON almacenado en archivo</span>
+            {data.url && (
+              <a 
+                href={data.url} 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="geometry-download-link"
+                download
+                title="Descargar GeoJSON"
+              >
+                <span className="icon-download"></span>
+              </a>
+            )}
+          </div>
+        </div>
       );
 
     case "image":
@@ -110,6 +177,37 @@ function renderSpecialType(data, compact) {
         <pre className="value-json">
           <code>{data.formatted}</code>
         </pre>
+      );
+
+    case "json-file":
+      // JSON almacenado como archivo en bucket
+      if (compact) {
+        return (
+          <span className="value-json-file">
+            <span className="icon-file"></span>
+            <span>📁 JSON (archivo)</span>
+          </span>
+        );
+      }
+      return (
+        <div className="value-json-file-container">
+          <div className="json-file-info">
+            <span className="icon-file"></span>
+            <span>JSON almacenado en archivo</span>
+          </div>
+          {data.url && (
+            <a 
+              href={data.url} 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="json-file-link"
+              download
+            >
+              <span className="icon-download"></span>
+              Descargar JSON
+            </a>
+          )}
+        </div>
       );
 
     default:

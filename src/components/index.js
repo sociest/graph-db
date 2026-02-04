@@ -5,6 +5,7 @@ export { default as EntityHeader } from "./EntityHeader";
 export { default as ClaimItem } from "./ClaimItem";
 export { default as ClaimsList } from "./ClaimsList";
 export { default as ValueRenderer } from "./ValueRenderer";
+export { default as MiniMap } from "./MiniMap";
 export { default as Navigation } from "./Navigation";
 export { default as AuthModal } from "./AuthModal";
 export { default as UserMenu } from "./UserMenu";
