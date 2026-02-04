@@ -5,14 +5,14 @@ import { useRouter } from "next/navigation";
 import { Navigation, LoadingState } from "@/components";
 import { useAuth } from "@/context/AuthContext";
 import * as database from "@/lib/database";
-import { searchEntities, createEntity, createClaim, createQualifier, createReference, uploadGeoJSON, uploadJSON, BUCKETS } from "@/lib/database";
+import { searchEntities, searchEntitiesAdvanced, createEntity, createClaim, createQualifier, createReference, uploadGeoJSON, uploadJSON, BUCKETS } from "@/lib/database";
 import { registry } from "@/plugins";
 import * as XLSX from "xlsx";
 
 // Configuración de rate limit y batching
 const BATCH_SIZE = 10; // Número de operaciones por lote
 const BATCH_DELAY = 100; // ms entre lotes
-const RATE_LIMIT_RETRY_DELAY = 1000; // 1 segundo de espera si hay rate limit
+const RATE_LIMIT_RETRY_DELAY = 10000; // 10 segundo de espera si hay rate limit
 const MAX_RETRIES = 3; // Máximo de reintentos por operación
 
 /**
@@ -147,6 +147,12 @@ export default function ImportPage() {
   const [entitiesPage, setEntitiesPage] = useState(1);
   const [entitiesPerPage, setEntitiesPerPage] = useState(10);
   
+  // Condiciones de búsqueda para reconciliación
+  // Cada condición: { id, propertyId, propertyLabel, column }
+  // propertyId: ID de la propiedad en la base de datos
+  // column: nombre de la columna del archivo que contiene el valor
+  const [reconcileConditions, setReconcileConditions] = useState([]);
+  
   // Claims/Qualifiers/References estáticos (se aplican a todas las entidades)
   const [staticClaims, setStaticClaims] = useState([]);
   // Cada staticClaim: { id, propertyId, propertyLabel, dataType, value, createProperty }
@@ -239,11 +245,13 @@ export default function ImportPage() {
     rawStrings: true, // Mantener valores como string (ej: 010101 no se convierte a 10101)
     dateNF: "", // Formato de fecha personalizado
     skipEmptyRows: true, // Omitir filas vacías
+    encoding: "UTF-8", // Codificación del archivo
   });
 
   // Leer archivo CSV, XLSX o GeoJSON
   async function readFile(file, options = parseOptions) {
     const fileName = file.name.toLowerCase();
+    const encoding = options.encoding || "UTF-8";
     
     // Detectar si es GeoJSON
     if (fileName.endsWith('.geojson') || fileName.endsWith('.json')) {
@@ -281,7 +289,7 @@ export default function ImportPage() {
         };
         
         reader.onerror = () => reject(new Error("Error al leer el archivo"));
-        reader.readAsText(file);
+        reader.readAsText(file, encoding);
       });
     }
     
@@ -292,11 +300,24 @@ export default function ImportPage() {
       reader.onload = (e) => {
         try {
           const data = e.target.result;
+          // Mapear encoding a codepage para XLSX
+          const codepageMap = {
+            "UTF-8": 65001,
+            "ISO-8859-1": 28591,
+            "Windows-1252": 1252,
+            "ASCII": 20127,
+            "UTF-16": 1200,
+            "UTF-16LE": 1200,
+            "UTF-16BE": 1201,
+          };
+          const codepage = codepageMap[encoding] || 65001;
+          
           // Opciones de lectura: raw para mantener strings, dateNF para formato de fecha
           const readOptions = { 
             type: "array",
             raw: options.rawStrings, // Mantener valores crudos como strings
             dateNF: options.dateNF || undefined,
+            codepage: codepage, // Codificación del archivo
           };
           const workbook = XLSX.read(data, readOptions);
           const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
@@ -398,6 +419,33 @@ export default function ImportPage() {
     setStaticClaims((prev) => prev.filter((claim) => claim.id !== id));
   }
 
+  // Añadir una condición de reconciliación
+  function addReconcileCondition() {
+    setReconcileConditions((prev) => [
+      ...prev,
+      {
+        id: Date.now(),
+        propertyId: null,
+        propertyLabel: "",
+        column: "",
+      },
+    ]);
+  }
+
+  // Actualizar una condición de reconciliación
+  function updateReconcileCondition(id, updates) {
+    setReconcileConditions((prev) =>
+      prev.map((cond) =>
+        cond.id === id ? { ...cond, ...updates } : cond
+      )
+    );
+  }
+
+  // Eliminar una condición de reconciliación
+  function removeReconcileCondition(id) {
+    setReconcileConditions((prev) => prev.filter((cond) => cond.id !== id));
+  }
+
   // Buscar propiedades existentes (entidades que pueden ser usadas como propiedades)
   async function searchProperties(query) {
     try {
@@ -424,45 +472,111 @@ export default function ImportPage() {
     setEntitiesPage(1); // Resetear paginación
     
     // Fase 1: Reconciliar entidades principales
-    // Extraer labels únicos primero
-    const uniqueLabels = [...new Set(
-      rawData
-        .map((row) => String(row[labelColumn] || "").trim())
-        .filter(Boolean)
-    )];
+    // Verificar si hay condiciones adicionales configuradas
+    const activeConditions = reconcileConditions.filter(c => c.propertyId && c.column);
+    const useAdvancedSearch = activeConditions.length > 0;
     
+    // Si hay condiciones, necesitamos procesar fila por fila
+    // Si no, podemos agrupar por label único
     const results = {};
     
-    // Procesar en lotes con retry
-    await processBatches(
-      uniqueLabels,
-      async (label) => {
-        try {
-          const matches = await withRetry(() => searchEntities(label, 5));
-          const matchList = matches.rows || [];
-          
-          // Buscar coincidencia por label o alias (normalizado)
-          const bestMatch = matchList.find(
-            (m) => textMatches(m.label, label) ||
-                   m.aliases?.some(a => textMatches(a, label))
-          );
-          
-          // Siempre permitir cambiar - selectedMatch es sugerencia, no obligatorio
-          results[label] = {
-            label,
-            matches: matchList,
-            selectedMatch: bestMatch || null,
-            createNew: !bestMatch, // Sugerencia, el usuario puede cambiar
-          };
-        } catch (err) {
-          console.error(`Error reconciliando "${label}":`, err);
-          results[label] = { label, matches: [], selectedMatch: null, createNew: true };
+    if (useAdvancedSearch) {
+      // Procesar fila por fila porque cada fila puede tener valores diferentes para las condiciones
+      const rowsToProcess = rawData.map((row, idx) => ({
+        row,
+        label: String(row[labelColumn] || "").trim(),
+        idx,
+      })).filter(r => r.label);
+      
+      // Agrupar por label para evitar duplicados en la UI
+      const labelGroups = {};
+      for (const item of rowsToProcess) {
+        if (!labelGroups[item.label]) {
+          labelGroups[item.label] = [];
         }
-        return label;
-      },
-      (progress) => setReconcileProgress(progress),
-      BATCH_SIZE
-    );
+        labelGroups[item.label].push(item.row);
+      }
+      
+      const uniqueLabels = Object.keys(labelGroups);
+      
+      await processBatches(
+        uniqueLabels,
+        async (label) => {
+          try {
+            // Tomar la primera fila con este label para las condiciones
+            const sampleRow = labelGroups[label][0];
+            
+            // Construir condiciones de búsqueda
+            const searchConditions = {
+              text: label,
+              properties: activeConditions.map(cond => ({
+                propertyId: cond.propertyId,
+                value: String(sampleRow[cond.column] || "").trim(),
+              })).filter(p => p.value),
+            };
+            
+            // Buscar con condiciones avanzadas
+            const matchList = await withRetry(() => searchEntitiesAdvanced(searchConditions, 5));
+            
+            // Buscar coincidencia exacta
+            const bestMatch = matchList.find(
+              (m) => textMatches(m.label, label) ||
+                     m.aliases?.some(a => textMatches(a, label))
+            );
+            
+            results[label] = {
+              label,
+              matches: matchList,
+              selectedMatch: bestMatch || (matchList.length === 1 ? matchList[0] : null),
+              createNew: !bestMatch && matchList.length === 0,
+              conditionsUsed: searchConditions.properties,
+            };
+          } catch (err) {
+            console.error(`Error reconciliando "${label}":`, err);
+            results[label] = { label, matches: [], selectedMatch: null, createNew: true };
+          }
+          return label;
+        },
+        (progress) => setReconcileProgress(progress),
+        BATCH_SIZE
+      );
+    } else {
+      // Búsqueda simple por label/alias
+      const uniqueLabels = [...new Set(
+        rawData
+          .map((row) => String(row[labelColumn] || "").trim())
+          .filter(Boolean)
+      )];
+      
+      await processBatches(
+        uniqueLabels,
+        async (label) => {
+          try {
+            const matches = await withRetry(() => searchEntities(label, 5));
+            const matchList = matches.rows || [];
+            
+            // Buscar coincidencia por label o alias (normalizado)
+            const bestMatch = matchList.find(
+              (m) => textMatches(m.label, label) ||
+                     m.aliases?.some(a => textMatches(a, label))
+            );
+            
+            results[label] = {
+              label,
+              matches: matchList,
+              selectedMatch: bestMatch || null,
+              createNew: !bestMatch,
+            };
+          } catch (err) {
+            console.error(`Error reconciliando "${label}":`, err);
+            results[label] = { label, matches: [], selectedMatch: null, createNew: true };
+          }
+          return label;
+        },
+        (progress) => setReconcileProgress(progress),
+        BATCH_SIZE
+      );
+    }
     
     setReconcileResults(results);
     
@@ -996,6 +1110,7 @@ export default function ImportPage() {
     setRelationReconcile({});
     setReconcileStep("entities");
     setStaticClaims([]);
+    setReconcileConditions([]);
     setReconcileProgress(0);
     setImportProgress(0);
     setImportResults({ created: 0, updated: 0, relationsCreated: 0, claims: 0, errors: [] });
@@ -1106,6 +1221,23 @@ export default function ImportPage() {
                       <span className="option-desc">Ignora las filas que no tienen datos</span>
                     </div>
                   </label>
+                  <div className="select-option">
+                    <div className="option-content">
+                      <span className="option-label">Codificación del archivo</span>
+                      <span className="option-desc">Selecciona la codificación de caracteres del archivo</span>
+                    </div>
+                    <select
+                      value={parseOptions.encoding}
+                      onChange={(e) => setParseOptions(prev => ({ ...prev, encoding: e.target.value }))}
+                      className="encoding-select"
+                    >
+                      <option value="UTF-8">UTF-8 (Recomendado)</option>
+                      <option value="ISO-8859-1">ISO-8859-1 (Latin-1)</option>
+                      <option value="Windows-1252">Windows-1252</option>
+                      <option value="ASCII">ASCII</option>
+                      <option value="UTF-16">UTF-16</option>
+                    </select>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1261,6 +1393,44 @@ export default function ImportPage() {
                 </button>
               </div>
 
+              {/* Condiciones de reconciliación */}
+              <div className="mapping-section">
+                <h3>Condiciones de Reconciliación</h3>
+                <p className="section-desc">
+                  Añade condiciones adicionales para buscar coincidencias. Además del label/alias, 
+                  se buscará entidades que tengan propiedades con valores específicos de las columnas del archivo.
+                </p>
+
+                <div className="reconcile-conditions-list">
+                  {reconcileConditions.map((condition) => (
+                    <ReconcileConditionRow
+                      key={condition.id}
+                      condition={condition}
+                      headers={headers.filter(h => h !== labelColumn)}
+                      onUpdate={(updates) => updateReconcileCondition(condition.id, updates)}
+                      onRemove={() => removeReconcileCondition(condition.id)}
+                      onSearchProperties={searchProperties}
+                    />
+                  ))}
+                </div>
+
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-add-condition"
+                  onClick={addReconcileCondition}
+                >
+                  + Añadir condición de búsqueda
+                </button>
+
+                {reconcileConditions.length > 0 && (
+                  <div className="conditions-info">
+                    <small>
+                      💡 Las condiciones se combinan con AND: una entidad debe cumplir TODAS las condiciones para coincidir.
+                    </small>
+                  </div>
+                )}
+              </div>
+
               <div className="step-actions">
                 <button className="btn btn-secondary" onClick={() => setCurrentStep(STEPS.PREVIEW)}>
                   ← Volver
@@ -1359,6 +1529,7 @@ export default function ImportPage() {
                                       setEntitiesPage(1);
                                     }}
                                   >
+                                    <option value={5}>5</option>
                                     <option value={10}>10</option>
                                     <option value={15}>15</option>
                                     <option value={20}>20</option>
@@ -1953,6 +2124,26 @@ export default function ImportPage() {
           color: var(--color-text-muted, #72777d);
         }
 
+        .select-option {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 1rem;
+          padding: 0.75rem;
+          background: var(--color-bg-card, #ffffff);
+          border: 1px solid var(--color-border-light, #c8ccd1);
+          border-radius: var(--radius-sm, 2px);
+        }
+
+        .encoding-select {
+          padding: 0.5rem 0.75rem;
+          border: 1px solid var(--color-border-light, #c8ccd1);
+          border-radius: var(--radius-sm, 2px);
+          background: var(--color-bg-card, #ffffff);
+          font-size: 0.875rem;
+          min-width: 180px;
+        }
+
         .preview-table-container {
           overflow-x: auto;
           border: 1px solid var(--color-border-light, #c8ccd1);
@@ -2060,6 +2251,28 @@ export default function ImportPage() {
           gap: 0.5rem;
         }
 
+        .reconcile-conditions-list {
+          display: flex;
+          flex-direction: column;
+          gap: 0.5rem;
+          margin-bottom: 1rem;
+        }
+
+        .btn-add-condition {
+          display: inline-flex;
+          align-items: center;
+          gap: 0.5rem;
+        }
+
+        .conditions-info {
+          margin-top: 0.75rem;
+          padding: 0.75rem;
+          background: rgba(6, 69, 173, 0.05);
+          border: 1px solid rgba(6, 69, 173, 0.2);
+          border-radius: var(--radius-sm, 2px);
+          color: var(--color-text-secondary, #54595d);
+        }
+
         .progress-container {
           text-align: center;
           padding: 2rem;
@@ -2106,9 +2319,15 @@ export default function ImportPage() {
           display: flex;
           flex-direction: column;
           gap: 0.5rem;
-          max-height: 400px;
-          overflow-y: auto;
           margin-bottom: 1.5rem;
+          padding: 0.25rem;
+          border: 1px solid var(--color-border-light, #c8ccd1);
+          border-radius: var(--radius-md, 4px);
+          background: var(--color-bg-card, #ffffff);
+        }
+
+        .reconcile-list > * {
+          flex-shrink: 0;
         }
 
         /* Paginación */
@@ -2244,7 +2463,6 @@ export default function ImportPage() {
         .relation-column-section .reconcile-list {
           margin: 0;
           padding: 0.5rem;
-          max-height: 300px;
         }
 
         /* Filas de reconciliación de relaciones */
@@ -3796,6 +4014,263 @@ function ReferenceMappingRow({ reference, onUpdate, onRemove, onSearchProperties
   );
 }
 
+// Componente para condición de reconciliación
+function ReconcileConditionRow({ condition, headers, onUpdate, onRemove, onSearchProperties }) {
+  const [entities, setEntities] = useState([]);
+  const [entitySearch, setEntitySearch] = useState("");
+  const [showEntityDropdown, setShowEntityDropdown] = useState(false);
+  const [loadingEntities, setLoadingEntities] = useState(false);
+
+  // Cargar entidades al montar
+  useEffect(() => {
+    async function loadInitialEntities() {
+      setLoadingEntities(true);
+      try {
+        const result = await database.listEntities(100, 0);
+        setEntities(result.rows || []);
+      } catch (err) {
+        console.error("Error loading entities:", err);
+      } finally {
+        setLoadingEntities(false);
+      }
+    }
+    loadInitialEntities();
+  }, []);
+
+  async function handlePropertySearch(query) {
+    setEntitySearch(query);
+    if (query.length >= 2) {
+      setLoadingEntities(true);
+      try {
+        const result = await database.searchEntities(query, 50, 0);
+        setEntities(result.rows || []);
+      } catch (err) {
+        console.error("Error searching entities:", err);
+      } finally {
+        setLoadingEntities(false);
+      }
+    }
+  }
+
+  function selectProperty(entity) {
+    onUpdate({
+      propertyId: entity.$id,
+      propertyLabel: entity.label,
+    });
+    setShowEntityDropdown(false);
+    setEntitySearch("");
+  }
+
+  const filteredEntities = entitySearch.length >= 2
+    ? entities.filter(e => e.label?.toLowerCase().includes(entitySearch.toLowerCase()))
+    : entities;
+
+  return (
+    <div className="reconcile-condition-row">
+      <div className="condition-property">
+        <label>Propiedad</label>
+        <div className="property-selector">
+          {condition.propertyId ? (
+            <div className="selected-property">
+              <span>{condition.propertyLabel}</span>
+              <button 
+                className="clear-btn"
+                onClick={() => onUpdate({ propertyId: null, propertyLabel: "" })}
+              >
+                ✕
+              </button>
+            </div>
+          ) : (
+            <div className="property-search-container">
+              <input
+                type="text"
+                value={entitySearch}
+                onChange={(e) => handlePropertySearch(e.target.value)}
+                onFocus={() => setShowEntityDropdown(true)}
+                placeholder="Buscar propiedad..."
+              />
+              {showEntityDropdown && (
+                <div className="entity-dropdown">
+                  {loadingEntities && <div className="dropdown-loading">Cargando...</div>}
+                  <div className="entity-list">
+                    {filteredEntities.map((entity) => (
+                      <button
+                        key={entity.$id}
+                        type="button"
+                        onClick={() => selectProperty(entity)}
+                        className="entity-option"
+                      >
+                        {entity.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="condition-column">
+        <label>Columna del archivo</label>
+        <select
+          value={condition.column}
+          onChange={(e) => onUpdate({ column: e.target.value })}
+        >
+          <option value="">-- Seleccionar columna --</option>
+          {headers.map((h) => (
+            <option key={h} value={h}>{h}</option>
+          ))}
+        </select>
+      </div>
+
+      <button
+        type="button"
+        onClick={onRemove}
+        className="btn-remove-condition"
+        title="Eliminar condición"
+      >
+        ✕
+      </button>
+
+      <style jsx>{`
+        .reconcile-condition-row {
+          display: flex;
+          align-items: flex-end;
+          gap: 1rem;
+          padding: 1rem;
+          background: var(--color-bg, #f8f9fa);
+          border: 1px solid var(--color-border-light, #c8ccd1);
+          border-radius: var(--radius-md, 4px);
+          margin-bottom: 0.5rem;
+        }
+
+        .condition-property,
+        .condition-column {
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          gap: 0.375rem;
+        }
+
+        .condition-property label,
+        .condition-column label {
+          font-size: 0.75rem;
+          font-weight: 600;
+          color: var(--color-text-secondary, #54595d);
+          text-transform: uppercase;
+        }
+
+        .property-selector {
+          position: relative;
+        }
+
+        .selected-property {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 0.5rem 0.75rem;
+          background: var(--color-bg-card, #ffffff);
+          border: 1px solid var(--color-primary, #0645ad);
+          border-radius: var(--radius-sm, 2px);
+          color: var(--color-primary, #0645ad);
+          font-weight: 500;
+        }
+
+        .property-search-container {
+          position: relative;
+        }
+
+        .property-search-container input {
+          width: 100%;
+          padding: 0.5rem 0.75rem;
+          border: 1px solid var(--color-border-light, #c8ccd1);
+          border-radius: var(--radius-sm, 2px);
+          font-size: 0.875rem;
+        }
+
+        .entity-dropdown {
+          position: absolute;
+          top: 100%;
+          left: 0;
+          right: 0;
+          max-height: 200px;
+          overflow-y: auto;
+          background: var(--color-bg-card, #ffffff);
+          border: 1px solid var(--color-border-light, #c8ccd1);
+          border-radius: var(--radius-sm, 2px);
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+          z-index: 100;
+        }
+
+        .entity-list {
+          display: flex;
+          flex-direction: column;
+        }
+
+        .entity-option {
+          padding: 0.5rem 0.75rem;
+          text-align: left;
+          border: none;
+          background: none;
+          cursor: pointer;
+          font-size: 0.875rem;
+          color: var(--color-text, #202122);
+        }
+
+        .entity-option:hover {
+          background: var(--color-bg-alt, #eaecf0);
+        }
+
+        .dropdown-loading {
+          padding: 0.5rem;
+          text-align: center;
+          color: var(--color-text-muted, #72777d);
+          font-size: 0.75rem;
+        }
+
+        .condition-column select {
+          padding: 0.5rem 0.75rem;
+          border: 1px solid var(--color-border-light, #c8ccd1);
+          border-radius: var(--radius-sm, 2px);
+          font-size: 0.875rem;
+          background: var(--color-bg-card, #ffffff);
+        }
+
+        .clear-btn {
+          background: none;
+          border: none;
+          cursor: pointer;
+          color: var(--color-text-muted, #72777d);
+          padding: 0.125rem 0.25rem;
+        }
+
+        .clear-btn:hover {
+          color: var(--color-error, #d33);
+        }
+
+        .btn-remove-condition {
+          padding: 0.5rem;
+          background: none;
+          border: 1px solid var(--color-border-light, #c8ccd1);
+          border-radius: var(--radius-sm, 2px);
+          cursor: pointer;
+          color: var(--color-text-muted, #72777d);
+          font-size: 1rem;
+          line-height: 1;
+          transition: all 0.2s;
+        }
+
+        .btn-remove-condition:hover {
+          background: rgba(211, 51, 51, 0.1);
+          border-color: var(--color-error, #d33);
+          color: var(--color-error, #d33);
+        }
+      `}</style>
+    </div>
+  );
+}
+
 // Componente para claim estático
 function StaticClaimRow({ claim, onUpdate, onRemove }) {
   const [entities, setEntities] = useState([]);
@@ -4555,6 +5030,8 @@ function ReconcileRow({ result, onUpdate }) {
           margin-top: 0.75rem;
           padding-top: 0.75rem;
           border-top: 1px dashed var(--color-border-light, #c8ccd1);
+          position: relative;
+          z-index: 10;
         }
         
         .selector-label {
@@ -4574,7 +5051,22 @@ function EntitySelectorInline({ onSelect, placeholder = "Buscar entidad..." }) {
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [showResults, setShowResults] = useState(false);
+  const [dropdownStyle, setDropdownStyle] = useState({});
   const debounceRef = useRef(null);
+  const inputRef = useRef(null);
+  
+  // Calcular posición del dropdown cuando se muestra
+  useEffect(() => {
+    if (showResults && inputRef.current) {
+      const rect = inputRef.current.getBoundingClientRect();
+      setDropdownStyle({
+        position: 'fixed',
+        top: rect.bottom + 'px',
+        left: rect.left + 'px',
+        width: rect.width + 'px',
+      });
+    }
+  }, [showResults]);
   
   async function handleSearch(searchQuery) {
     if (!searchQuery || searchQuery.length < 2) {
@@ -4618,6 +5110,7 @@ function EntitySelectorInline({ onSelect, placeholder = "Buscar entidad..." }) {
   return (
     <div className="entity-selector-inline">
       <input
+        ref={inputRef}
         type="text"
         value={query}
         onChange={handleInputChange}
@@ -4628,7 +5121,7 @@ function EntitySelectorInline({ onSelect, placeholder = "Buscar entidad..." }) {
       />
       {loading && <span className="search-loading">Buscando...</span>}
       {showResults && results.length > 0 && (
-        <div className="entity-results-dropdown">
+        <div className="entity-results-dropdown" style={dropdownStyle}>
           {results.map((entity) => (
             <div
               key={entity.$id}
@@ -4679,17 +5172,13 @@ function EntitySelectorInline({ onSelect, placeholder = "Buscar entidad..." }) {
         
         .entity-results-dropdown {
           position: absolute;
-          top: 100%;
-          left: 0;
-          right: 0;
           background: white;
           border: 1px solid var(--color-border, #a2a9b1);
-          border-top: none;
-          border-radius: 0 0 var(--radius-sm, 2px) var(--radius-sm, 2px);
-          max-height: 200px;
+          border-radius: var(--radius-sm, 2px);
+          max-height: 250px;
           overflow-y: auto;
-          z-index: 100;
-          box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+          z-index: 99999;
+          box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
         }
         
         .entity-result-item {

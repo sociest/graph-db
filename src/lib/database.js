@@ -93,6 +93,123 @@ export async function searchEntities(searchTerm, limit = 20, offset = 0) {
 }
 
 /**
+ * Busca entidades que tengan un claim con una propiedad específica y un valor determinado
+ * @param {string} propertyId - ID de la propiedad
+ * @param {string} value - Valor a buscar (se busca en value_raw como texto)
+ * @param {number} limit - Límite de resultados
+ * @returns {Promise<Array>} - Lista de entidades que coinciden
+ */
+export async function searchEntitiesByPropertyValue(propertyId, value, limit = 10) {
+  if (!propertyId || !value) return [];
+  
+  try {
+    // Buscar claims que tengan esa propiedad
+    const claimsResult = await tablesDB.listRows({
+      databaseId: DATABASE_ID,
+      tableId: TABLES.CLAIMS,
+      queries: [
+        Query.equal("property", propertyId),
+        Query.limit(100), // Obtener suficientes para filtrar
+      ],
+    });
+
+    if (!claimsResult.rows || claimsResult.rows.length === 0) {
+      return [];
+    }
+
+    // Filtrar en el cliente por valor (normalizado)
+    const searchValue = String(value).toLowerCase().trim();
+    const matchingClaims = claimsResult.rows.filter(claim => {
+      if (!claim.value_raw) return false;
+      try {
+        // value_raw puede ser un JSON string o un valor directo
+        let rawValue = claim.value_raw;
+        if (typeof rawValue === "string") {
+          // Intentar parsear como JSON
+          try {
+            rawValue = JSON.parse(rawValue);
+          } catch {
+            // Si no es JSON, usar el string directamente
+          }
+        }
+        // Comparar como string normalizado
+        const claimValue = String(rawValue?.data ?? rawValue).toLowerCase().trim();
+        return claimValue.includes(searchValue) || searchValue.includes(claimValue);
+      } catch {
+        return false;
+      }
+    });
+
+    // Extraer IDs únicos de las entidades
+    const entityIds = [...new Set(matchingClaims.map(c => c.subject?.$id || c.subject).filter(Boolean))];
+    
+    if (entityIds.length === 0) return [];
+
+    // Obtener las entidades una por una
+    const entities = [];
+    for (const id of entityIds.slice(0, limit)) {
+      try {
+        const entity = await tablesDB.getRow({
+          databaseId: DATABASE_ID,
+          tableId: TABLES.ENTITIES,
+          rowId: id,
+        });
+        if (entity) entities.push(entity);
+      } catch (e) {
+        // Entidad no encontrada, ignorar
+        console.warn(`Entidad ${id} no encontrada`);
+      }
+    }
+
+    return entities;
+  } catch (err) {
+    console.error("Error buscando entidades por propiedad:", err);
+    return [];
+  }
+}
+
+/**
+ * Busca entidades usando múltiples condiciones (label/alias + propiedades)
+ * @param {Object} conditions - Condiciones de búsqueda
+ * @param {string} conditions.text - Texto para buscar en label/alias
+ * @param {Array} conditions.properties - Array de {propertyId, value} para buscar por claims
+ * @param {number} limit - Límite de resultados
+ * @returns {Promise<Array>} - Lista de entidades que coinciden con TODAS las condiciones
+ */
+export async function searchEntitiesAdvanced(conditions, limit = 10) {
+  const { text, properties = [] } = conditions;
+  
+  let candidates = null;
+  
+  // Si hay texto, buscar primero por label/alias
+  if (text && text.trim()) {
+    const textResult = await searchEntities(text, limit * 2);
+    candidates = textResult.rows || [];
+  }
+  
+  // Para cada propiedad, buscar y hacer intersección
+  for (const prop of properties) {
+    if (!prop.propertyId || !prop.value) continue;
+    
+    const propMatches = await searchEntitiesByPropertyValue(prop.propertyId, prop.value, limit * 3);
+    
+    if (candidates === null) {
+      // Primera condición
+      candidates = propMatches;
+    } else {
+      // Intersección: solo mantener los que aparecen en ambos
+      const propIds = new Set(propMatches.map(e => e.$id));
+      candidates = candidates.filter(e => propIds.has(e.$id));
+    }
+    
+    // Si no hay candidatos, no tiene sentido seguir
+    if (candidates.length === 0) break;
+  }
+  
+  return (candidates || []).slice(0, limit);
+}
+
+/**
  * Lista todas las entidades con paginación
  */
 export async function listEntities(limit = 25, offset = 0) {

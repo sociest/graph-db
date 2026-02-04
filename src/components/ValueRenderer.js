@@ -111,22 +111,6 @@ function renderSpecialType(data, compact) {
             geometryType={data.geometryType}
             height={180}
           />
-          <div className="geometry-info">
-            <span className="icon-map-pin"></span>
-            <span>GeoJSON almacenado en archivo</span>
-            {data.url && (
-              <a 
-                href={data.url} 
-                target="_blank" 
-                rel="noopener noreferrer"
-                className="geometry-download-link"
-                download
-                title="Descargar GeoJSON"
-              >
-                <span className="icon-download"></span>
-              </a>
-            )}
-          </div>
         </div>
       );
 
