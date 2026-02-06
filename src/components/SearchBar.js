@@ -1,13 +1,22 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 /**
  * Barra de búsqueda de entidades
  */
-export default function SearchBar({ onSearch, placeholder = "Buscar entidades..." }) {
-  const [query, setQuery] = useState("");
+export default function SearchBar({
+  onSearch,
+  placeholder = "Buscar entidades...",
+  initialQuery = "",
+  onQueryChange,
+}) {
+  const [query, setQuery] = useState(initialQuery);
   const [isSearching, setIsSearching] = useState(false);
+
+  useEffect(() => {
+    setQuery(initialQuery || "");
+  }, [initialQuery]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -28,7 +37,10 @@ export default function SearchBar({ onSearch, placeholder = "Buscar entidades...
         <input
           type="text"
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            onQueryChange?.(e.target.value);
+          }}
           placeholder={placeholder}
           className="search-input"
           disabled={isSearching}

@@ -5,19 +5,19 @@ import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
 
 export default function UserMenu({ onLoginClick }) {
-  const { 
-    user, 
-    userTeams, 
+  const {
+    user,
+    userTeams,
     activeTeam,
-    isAuthenticated, 
+    isAuthenticated,
     isAdmin,
     isMainTeamMember,
-    logout, 
-    authEnabled, 
+    logout,
+    authEnabled,
     loading,
     switchTeam,
   } = useAuth();
-  
+
   const [showTeamSelector, setShowTeamSelector] = useState(false);
 
   if (!authEnabled) {
@@ -50,7 +50,7 @@ export default function UserMenu({ onLoginClick }) {
         </div>
         <div className="user-details">
           <span className="user-name">{user.name || user.email}</span>
-          <button 
+          <button
             className="user-team-btn"
             onClick={() => setShowTeamSelector(!showTeamSelector)}
             title={userTeams.length > 0 ? "Cambiar equipo" : "Sin equipos"}
@@ -98,7 +98,7 @@ export default function UserMenu({ onLoginClick }) {
           )}
         </div>
       )}
-      
+
       <div className="user-dropdown">
         {activeTeam && (
           <div className="user-teams-section">
@@ -111,15 +111,15 @@ export default function UserMenu({ onLoginClick }) {
             </div>
           </div>
         )}
-        
+
         {userTeams.length > 0 && (
           <>
             <div className="dropdown-divider"></div>
             <div className="user-teams-section">
               <span className="dropdown-label">Mis Equipos ({userTeams.length})</span>
               {userTeams.map((team) => (
-                <button 
-                  key={team.$id} 
+                <button
+                  key={team.$id}
                   className={`team-item ${activeTeam?.$id === team.$id ? "active" : ""}`}
                   onClick={() => handleTeamSwitch(team)}
                 >
@@ -130,21 +130,28 @@ export default function UserMenu({ onLoginClick }) {
             </div>
           </>
         )}
-        
+
         <div className="dropdown-divider"></div>
-        
+
         <Link href="/teams" className="dropdown-item">
           <span className="icon-team"></span>
           Gestionar Equipos
         </Link>
-        
+
+        {isAuthenticated && (
+          <Link href="/import" className="dropdown-item">
+            <span className="icon-import"></span>
+            <span>Importar</span>
+          </Link>
+        )}
+
         {isAdmin && (
           <Link href="/admin" className="dropdown-item">
             <span className="icon-settings"></span>
             Administración
           </Link>
         )}
-        
+
         <div className="dropdown-divider"></div>
         <button className="dropdown-item logout-btn" onClick={logout}>
           <span className="icon-logout"></span>

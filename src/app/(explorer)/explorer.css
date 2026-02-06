@@ -92,6 +92,129 @@
   padding: var(--spacing-md);
 }
 
+.nav-search {
+  position: relative;
+  flex: 1;
+  max-width: 520px;
+  margin: 0 var(--spacing-lg);
+}
+
+.nav-search-form {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-lg);
+  padding: 0.25rem 0.75rem;
+}
+
+.nav-search-icon {
+  color: var(--color-text-muted);
+}
+
+.nav-search-input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  padding: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.nav-search-input:focus {
+  outline: none;
+}
+
+.nav-search-button {
+  border: none;
+  background: var(--color-primary, #0645ad);
+  color: #fff;
+  padding: 0.4rem 0.75rem;
+  border-radius: var(--radius-sm, 2px);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.nav-search-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.nav-search-dropdown {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  left: 0;
+  right: 0;
+  background: var(--color-bg-card, #ffffff);
+  border: 1px solid var(--color-border-light, #c8ccd1);
+  border-radius: var(--radius-md, 4px);
+  box-shadow: var(--shadow-lg, 0 4px 16px rgba(0,0,0,0.15));
+  z-index: 200;
+  padding: 0.5rem 0;
+}
+
+.nav-search-loading,
+.nav-search-empty {
+  padding: 0.75rem 1rem;
+  color: var(--color-text-muted, #72777d);
+  font-size: 0.85rem;
+}
+
+.nav-search-results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.nav-search-result {
+  width: 100%;
+  text-align: left;
+  padding: 0.6rem 1rem;
+  border: none;
+  background: none;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.nav-search-result:hover {
+  background: var(--color-bg-alt, #eaecf0);
+}
+
+.nav-search-result .result-label {
+  font-weight: 600;
+  color: var(--color-text, #202122);
+}
+
+.nav-search-result .result-id {
+  font-size: 0.75rem;
+  color: var(--color-text-muted, #72777d);
+  font-family: var(--font-mono, monospace);
+}
+
+.nav-search-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  border-top: 1px solid var(--color-border-light, #c8ccd1);
+  padding: 0.5rem 1rem 0.25rem;
+}
+
+.nav-search-action {
+  border: none;
+  background: none;
+  color: var(--color-primary, #0645ad);
+  text-align: left;
+  padding: 0.3rem 0;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.nav-search-action:hover {
+  text-decoration: underline;
+}
+
 .nav-logo {
   display: flex;
   align-items: center;
