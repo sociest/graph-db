@@ -64,7 +64,7 @@ export default function UserMenu({ onLoginClick }) {
         </div>
       </div>
 
-      {/* Selector de Team */}
+      {/* Selector de Team + menú de usuario */}
       {showTeamSelector && (
         <div className="team-selector-dropdown">
           <div className="dropdown-header">
@@ -96,68 +96,35 @@ export default function UserMenu({ onLoginClick }) {
               </button>
             ))
           )}
+
+          <div className="dropdown-divider"></div>
+
+          <Link href="/teams" className="dropdown-item" onClick={() => setShowTeamSelector(false)}>
+            <span className="icon-team"></span>
+            Gestionar Equipos
+          </Link>
+
+          {isAuthenticated && (
+            <Link href="/import" className="dropdown-item" onClick={() => setShowTeamSelector(false)}>
+              <span className="icon-import"></span>
+              <span>Importar</span>
+            </Link>
+          )}
+
+          {isAdmin && (
+            <Link href="/admin" className="dropdown-item" onClick={() => setShowTeamSelector(false)}>
+              <span className="icon-settings"></span>
+              Administración
+            </Link>
+          )}
+
+          <div className="dropdown-divider"></div>
+          <button className="dropdown-item logout-btn" onClick={logout}>
+            <span className="icon-logout"></span>
+            Cerrar Sesión
+          </button>
         </div>
       )}
-
-      <div className="user-dropdown">
-        {activeTeam && (
-          <div className="user-teams-section">
-            <span className="dropdown-label">Equipo Activo</span>
-            <div className="active-team-info">
-              <span className="team-name">{activeTeam.name}</span>
-              <span className="team-role">
-                {activeTeam.roles?.join(", ") || "Miembro"}
-              </span>
-            </div>
-          </div>
-        )}
-
-        {userTeams.length > 0 && (
-          <>
-            <div className="dropdown-divider"></div>
-            <div className="user-teams-section">
-              <span className="dropdown-label">Mis Equipos ({userTeams.length})</span>
-              {userTeams.map((team) => (
-                <button
-                  key={team.$id}
-                  className={`team-item ${activeTeam?.$id === team.$id ? "active" : ""}`}
-                  onClick={() => handleTeamSwitch(team)}
-                >
-                  <span className="team-name">{team.name}</span>
-                  <span className="team-members">{team.total} miembros</span>
-                </button>
-              ))}
-            </div>
-          </>
-        )}
-
-        <div className="dropdown-divider"></div>
-
-        <Link href="/teams" className="dropdown-item">
-          <span className="icon-team"></span>
-          Gestionar Equipos
-        </Link>
-
-        {isAuthenticated && (
-          <Link href="/import" className="dropdown-item">
-            <span className="icon-import"></span>
-            <span>Importar</span>
-          </Link>
-        )}
-
-        {isAdmin && (
-          <Link href="/admin" className="dropdown-item">
-            <span className="icon-settings"></span>
-            Administración
-          </Link>
-        )}
-
-        <div className="dropdown-divider"></div>
-        <button className="dropdown-item logout-btn" onClick={logout}>
-          <span className="icon-logout"></span>
-          Cerrar Sesión
-        </button>
-      </div>
     </div>
   );
 }
