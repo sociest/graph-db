@@ -59,6 +59,33 @@ export async function getCurrentUser() {
 }
 
 /**
+ * Obtiene las membresías del usuario actual (incluye invitaciones)
+ */
+export async function listUserMemberships() {
+  try {
+    const listFn = account.listMemberships || account.getMemberships;
+    if (typeof listFn !== "function") {
+      console.warn("Account memberships API not available in current SDK");
+      return [];
+    }
+
+    const result = await listFn.call(account);
+    return result.memberships || [];
+  } catch (error) {
+    console.error("Error listing user memberships:", error);
+    return [];
+  }
+}
+
+/**
+ * Obtiene invitaciones pendientes del usuario actual
+ */
+export async function getPendingInvitations() {
+  const memberships = await listUserMemberships();
+  return memberships.filter((membership) => membership.confirm === false);
+}
+
+/**
  * Obtiene los teams del usuario actual con sus roles (membresías)
  * Retorna los teams enriquecidos con la información de la membresía del usuario
  */

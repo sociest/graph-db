@@ -2,15 +2,17 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Navigation, LoadingState, ErrorState } from "@/components";
+import { Navigation, LoadingState } from "@/components";
 import { useAuth } from "@/context/AuthContext";
 import {
   createTeam,
   getTeamMembers,
+  getPendingInvitations,
   inviteToTeam,
   updateMemberRoles,
   removeMember,
   deleteTeam,
+  acceptTeamInvite,
   DEFAULT_TEAM_ROLES,
 } from "@/lib/auth";
 
@@ -39,6 +41,10 @@ export default function TeamsPage() {
   const [selectedTeam, setSelectedTeam] = useState(null);
   const [teamMembers, setTeamMembers] = useState([]);
   const [loadingMembers, setLoadingMembers] = useState(false);
+
+  // Estados para invitaciones pendientes
+  const [pendingInvites, setPendingInvites] = useState([]);
+  const [loadingInvites, setLoadingInvites] = useState(false);
   
   // Estados para invitar
   const [showInviteForm, setShowInviteForm] = useState(false);
@@ -57,6 +63,12 @@ export default function TeamsPage() {
     }
   }, [selectedTeam]);
 
+  useEffect(() => {
+    if (!authLoading && isAuthenticated) {
+      loadPendingInvites();
+    }
+  }, [authLoading, isAuthenticated]);
+
   async function loadTeamMembers(teamId) {
     setLoadingMembers(true);
     try {
@@ -67,6 +79,19 @@ export default function TeamsPage() {
       setTeamMembers([]);
     } finally {
       setLoadingMembers(false);
+    }
+  }
+
+  async function loadPendingInvites() {
+    setLoadingInvites(true);
+    try {
+      const invites = await getPendingInvitations();
+      setPendingInvites(invites);
+    } catch (err) {
+      console.error("Error loading invites:", err);
+      setPendingInvites([]);
+    } finally {
+      setLoadingInvites(false);
     }
   }
 
@@ -140,6 +165,45 @@ export default function TeamsPage() {
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
       setError(err.message || "Error al eliminar el miembro");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleAcceptInvite(invite) {
+    if (!invite?.secret) {
+      setError("Esta invitación requiere el enlace enviado por correo.");
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    try {
+      await acceptTeamInvite(invite.teamId, invite.$id, invite.userId, invite.secret);
+      setSuccess("Invitación aceptada");
+      await refreshUser();
+      await loadPendingInvites();
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err) {
+      setError(err.message || "Error al aceptar la invitación");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleDeclineInvite(invite) {
+    if (!invite?.teamId || !invite?.$id) return;
+    if (!confirm("¿Quieres rechazar esta invitación?")) return;
+
+    setLoading(true);
+    setError(null);
+    try {
+      await removeMember(invite.teamId, invite.$id);
+      setSuccess("Invitación rechazada");
+      await loadPendingInvites();
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err) {
+      setError(err.message || "Error al rechazar la invitación");
     } finally {
       setLoading(false);
     }
@@ -274,6 +338,56 @@ export default function TeamsPage() {
           {/* Lista de equipos */}
           <div className="teams-layout">
             <div className="teams-list-panel">
+              {/* Invitaciones pendientes */}
+              <div className="invites-panel">
+                <div className="section-header">
+                  <h3>Invitaciones pendientes</h3>
+                </div>
+                {loadingInvites ? (
+                  <LoadingState message="Cargando invitaciones..." />
+                ) : pendingInvites.length === 0 ? (
+                  <div className="empty-state compact">
+                    <p>No tienes invitaciones pendientes</p>
+                  </div>
+                ) : (
+                  <div className="invites-list">
+                    {pendingInvites.map((invite) => (
+                      <div key={invite.$id} className="invite-item">
+                        <div className="invite-info">
+                          <span className="invite-team">
+                            {invite.teamName || invite.teamId}
+                          </span>
+                          <span className="invite-role">
+                            Rol: {invite.roles?.[0] || "viewer"}
+                          </span>
+                        </div>
+                        <div className="invite-actions">
+                          <button
+                            className="btn btn-primary btn-sm"
+                            onClick={() => handleAcceptInvite(invite)}
+                            disabled={loading}
+                          >
+                            Aceptar
+                          </button>
+                          <button
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => handleDeclineInvite(invite)}
+                            disabled={loading}
+                          >
+                            Rechazar
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                    {pendingInvites.some((invite) => !invite.secret) && (
+                      <div className="invite-hint">
+                        Algunas invitaciones requieren el enlace del correo para aceptarse.
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
               <h2>Mis Equipos ({userTeams.length})</h2>
               {userTeams.length === 0 ? (
                 <div className="empty-state">
@@ -480,6 +594,55 @@ export default function TeamsPage() {
           border: 1px solid var(--color-border-light, #c8ccd1);
           border-radius: var(--radius-lg, 8px);
           padding: 1.5rem;
+        }
+
+        .invites-panel {
+          margin-bottom: 1.5rem;
+          padding-bottom: 1.5rem;
+          border-bottom: 1px solid var(--color-border-light, #c8ccd1);
+        }
+
+        .invites-list {
+          display: flex;
+          flex-direction: column;
+          gap: 0.75rem;
+        }
+
+        .invite-item {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 1rem;
+          padding: 0.75rem;
+          border: 1px solid var(--color-border-light, #c8ccd1);
+          border-radius: var(--radius-md, 4px);
+          background: var(--color-bg, #f8f9fa);
+        }
+
+        .invite-info {
+          display: flex;
+          flex-direction: column;
+          gap: 0.25rem;
+        }
+
+        .invite-team {
+          font-weight: 600;
+          color: var(--color-text, #202122);
+        }
+
+        .invite-role {
+          font-size: 0.85rem;
+          color: var(--color-text-secondary, #54595d);
+        }
+
+        .invite-actions {
+          display: flex;
+          gap: 0.5rem;
+        }
+
+        .invite-hint {
+          font-size: 0.85rem;
+          color: var(--color-text-muted, #72777d);
         }
 
         .teams-list-panel h2 {
@@ -851,6 +1014,10 @@ export default function TeamsPage() {
           text-align: center;
           padding: 3rem;
           color: var(--color-text-secondary, #54595d);
+        }
+
+        .empty-state.compact {
+          padding: 1rem 0;
         }
 
         .empty-state p {
