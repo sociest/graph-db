@@ -9,6 +9,16 @@ const TABLES = {
   REFERENCES: "references",
 };
 
+const SYSTEM_FIELDS = new Set([
+  "$id",
+  "$createdAt",
+  "$updatedAt",
+  "$permissions",
+  "$databaseId",
+  "$tableId",
+  "$collectionId",
+]);
+
 // Configuración de buckets para diferentes tipos de datos
 export const BUCKETS = {
   IMAGES: process.env.NEXT_PUBLIC_BUCKET_IMAGES || "images",
@@ -40,6 +50,32 @@ function generatePermissions(teamId, options = {}) {
   }
   
   return permissions;
+}
+
+function stripSystemFields(row) {
+  const data = { ...row };
+  for (const key of Object.keys(data)) {
+    if (SYSTEM_FIELDS.has(key)) {
+      delete data[key];
+    }
+  }
+  return data;
+}
+
+async function updateRowPermissions(tableId, rowId, permissions) {
+  const row = await tablesDB.getRow({
+    databaseId: DATABASE_ID,
+    tableId,
+    rowId,
+  });
+  const data = stripSystemFields(row);
+  return tablesDB.updateRow({
+    databaseId: DATABASE_ID,
+    tableId,
+    rowId,
+    data,
+    permissions,
+  });
 }
 
 // ============================================
@@ -263,6 +299,13 @@ export async function updateEntity(entityId, data) {
   return result;
 }
 
+/**
+ * Actualiza permisos de una entidad
+ */
+export async function updateEntityPermissions(entityId, permissions) {
+  return updateRowPermissions(TABLES.ENTITIES, entityId, permissions);
+}
+
 // ============================================
 // CLAIMS
 // ============================================
@@ -479,6 +522,13 @@ export async function updateReference(referenceId, data) {
 }
 
 /**
+ * Actualiza permisos de una referencia
+ */
+export async function updateReferencePermissions(referenceId, permissions) {
+  return updateRowPermissions(TABLES.REFERENCES, referenceId, permissions);
+}
+
+/**
  * Elimina una referencia
  */
 export async function deleteReference(referenceId) {
@@ -511,6 +561,13 @@ export async function updateQualifier(qualifierId, data) {
 }
 
 /**
+ * Actualiza permisos de un qualifier
+ */
+export async function updateQualifierPermissions(qualifierId, permissions) {
+  return updateRowPermissions(TABLES.QUALIFIERS, qualifierId, permissions);
+}
+
+/**
  * Elimina un qualifier
  */
 export async function deleteQualifier(qualifierId) {
@@ -540,6 +597,13 @@ export async function updateClaim(claimId, data) {
   });
 
   return result;
+}
+
+/**
+ * Actualiza permisos de un claim
+ */
+export async function updateClaimPermissions(claimId, permissions) {
+  return updateRowPermissions(TABLES.CLAIMS, claimId, permissions);
 }
 
 /**

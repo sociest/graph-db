@@ -6,6 +6,12 @@ import ValueRenderer from "./ValueRenderer";
 import QualifierForm from "./QualifierForm";
 import ReferenceForm from "./ReferenceForm";
 import { ConfirmModal } from "./EditModal";
+import PermissionsModal from "./PermissionsModal";
+import {
+  updateClaimPermissions,
+  updateQualifierPermissions,
+  updateReferencePermissions,
+} from "@/lib/database";
 
 /**
  * Muestra un claim individual con su propiedad, valor, qualifiers y referencias
@@ -41,6 +47,7 @@ export default function ClaimItem({
   // Estados para modales
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [showPermissions, setShowPermissions] = useState(false);
 
   async function handleDelete() {
     setDeleting(true);
@@ -91,6 +98,14 @@ export default function ClaimItem({
               title="Editar declaración"
             >
               ✎
+            </button>
+            <button
+              type="button"
+              className="btn-icon btn-edit"
+              onClick={() => setShowPermissions(true)}
+              title="Permisos"
+            >
+              🔐
             </button>
             <button
               type="button"
@@ -165,6 +180,16 @@ export default function ClaimItem({
         message="¿Estás seguro de que deseas eliminar esta declaración? También se eliminarán todos sus calificadores y referencias."
         loading={deleting}
       />
+
+      <PermissionsModal
+        isOpen={showPermissions}
+        onClose={() => setShowPermissions(false)}
+        title="Permisos del claim"
+        permissions={claim.$permissions || []}
+        onSave={async (permissions) => {
+          await updateClaimPermissions(claim.$id, permissions);
+        }}
+      />
     </div>
   );
 }
@@ -176,6 +201,7 @@ function QualifierItem({ qualifier, editable, onEdit, onDelete }) {
   const { property, value_raw, value_relation } = qualifier;
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showEditForm, setShowEditForm] = useState(false);
+  const [showPermissions, setShowPermissions] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
   let parsedValue = null;
@@ -234,6 +260,14 @@ function QualifierItem({ qualifier, editable, onEdit, onDelete }) {
           </button>
           <button
             type="button"
+            className="btn-icon-sm btn-edit"
+            onClick={() => setShowPermissions(true)}
+            title="Permisos"
+          >
+            🔐
+          </button>
+          <button
+            type="button"
             className="btn-icon-sm btn-delete"
             onClick={() => setShowDeleteConfirm(true)}
             title="Eliminar calificador"
@@ -263,6 +297,16 @@ function QualifierItem({ qualifier, editable, onEdit, onDelete }) {
         message="¿Estás seguro de que deseas eliminar este calificador?"
         loading={deleting}
       />
+
+      <PermissionsModal
+        isOpen={showPermissions}
+        onClose={() => setShowPermissions(false)}
+        title="Permisos del calificador"
+        permissions={qualifier.$permissions || []}
+        onSave={async (permissions) => {
+          await updateQualifierPermissions(qualifier.$id, permissions);
+        }}
+      />
     </div>
   );
 }
@@ -274,6 +318,7 @@ function ReferenceItem({ reference, editable, onEdit, onDelete }) {
   const { details, reference: refEntity } = reference;
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showEditForm, setShowEditForm] = useState(false);
+  const [showPermissions, setShowPermissions] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
   async function handleDelete() {
@@ -309,6 +354,14 @@ function ReferenceItem({ reference, editable, onEdit, onDelete }) {
           </button>
           <button
             type="button"
+            className="btn-icon-sm btn-edit"
+            onClick={() => setShowPermissions(true)}
+            title="Permisos"
+          >
+            🔐
+          </button>
+          <button
+            type="button"
             className="btn-icon-sm btn-delete"
             onClick={() => setShowDeleteConfirm(true)}
             title="Eliminar referencia"
@@ -337,6 +390,16 @@ function ReferenceItem({ reference, editable, onEdit, onDelete }) {
         title="Eliminar referencia"
         message="¿Estás seguro de que deseas eliminar esta referencia?"
         loading={deleting}
+      />
+
+      <PermissionsModal
+        isOpen={showPermissions}
+        onClose={() => setShowPermissions(false)}
+        title="Permisos de la referencia"
+        permissions={reference.$permissions || []}
+        onSave={async (permissions) => {
+          await updateReferencePermissions(reference.$id, permissions);
+        }}
       />
     </div>
   );

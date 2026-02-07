@@ -4,6 +4,8 @@ import { useState } from "react";
 import Link from "next/link";
 import EntityForm from "./EntityForm";
 import { ConfirmModal } from "./EditModal";
+import PermissionsModal from "./PermissionsModal";
+import { updateEntityPermissions } from "@/lib/database";
 
 /**
  * Encabezado de entidad
@@ -13,9 +15,11 @@ export default function EntityHeader({
   editable = false,
   onUpdate,
   onDelete,
+  onPermissionsUpdated,
 }) {
   const [showEditForm, setShowEditForm] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [showPermissions, setShowPermissions] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
   if (!entity) return null;
@@ -52,6 +56,14 @@ export default function EntityHeader({
                 title="Editar entidad"
               >
                 ✎ Editar
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => setShowPermissions(true)}
+                title="Permisos"
+              >
+                🔐 Permisos
               </button>
               <button
                 type="button"
@@ -112,6 +124,17 @@ export default function EntityHeader({
           entity={entity}
         />
       )}
+
+      <PermissionsModal
+        isOpen={showPermissions}
+        onClose={() => setShowPermissions(false)}
+        title="Permisos de la entidad"
+        permissions={entity.$permissions || []}
+        onSave={async (permissions) => {
+          await updateEntityPermissions(entity.$id, permissions);
+          await onPermissionsUpdated?.();
+        }}
+      />
 
       {/* Modal de confirmación de eliminación */}
       <ConfirmModal

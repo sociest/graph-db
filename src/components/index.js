@@ -9,6 +9,7 @@ export { default as MiniMap } from "./MiniMap";
 export { default as Navigation } from "./Navigation";
 export { default as AuthModal } from "./AuthModal";
 export { default as UserMenu } from "./UserMenu";
+export { default as PermissionsModal } from "./PermissionsModal";
 export { LoadingState, ErrorState, EmptyState } from "./States";
 
 // Componentes de edición

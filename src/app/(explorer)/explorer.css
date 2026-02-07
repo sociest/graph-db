@@ -2992,6 +2992,28 @@
   background: var(--color-bg);
 }
 
+/* Permissions modal */
+.permissions-modal {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.permissions-help {
+  font-size: 0.85rem;
+  color: var(--color-text-secondary);
+}
+
+.permissions-textarea {
+  width: 100%;
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-md, 4px);
+  padding: 0.75rem;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.85rem;
+  resize: vertical;
+}
+
 .confirm-message {
   color: var(--color-text);
   margin: 0;

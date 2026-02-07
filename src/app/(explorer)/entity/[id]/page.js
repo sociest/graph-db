@@ -287,6 +287,7 @@ export default function EntityPage({ params }) {
             editable={editable}
             onUpdate={handleUpdateEntity}
             onDelete={handleDeleteEntity}
+            onPermissionsUpdated={loadEntity}
           />
 
           {/* Claims / Statements */}
