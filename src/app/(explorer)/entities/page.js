@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Navigation, EntityCard, LoadingState, ErrorState, EmptyState } from "@/components";
-import { listEntities, createEntity, logAction } from "@/lib/database";
+import { listEntities, createEntity } from "@/lib/database";
 import { useAuth } from "@/context/AuthContext";
 import EntityForm from "@/components/EntityForm";
 
@@ -43,14 +43,6 @@ export default function EntitiesListPage() {
   async function handleCreateEntity(data) {
     const teamId = activeTeam?.$id || null;
     const newEntity = await createEntity(data, teamId);
-    await logAction("create", {
-      entityType: "entity",
-      entityId: newEntity.$id,
-      userId: user?.$id,
-      userName: user?.name,
-      teamId: teamId,
-      newData: data,
-    });
     // Navegar a la nueva entidad
     router.push(`/entity/${newEntity.$id}`);
   }

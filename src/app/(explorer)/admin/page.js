@@ -1,32 +1,9 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Navigation, LoadingState, ErrorState } from "@/components";
+import { Navigation, LoadingState } from "@/components";
 import { useAuth } from "@/context/AuthContext";
-import { getAuditLog } from "@/lib/database";
-
-const ITEMS_PER_PAGE = 25;
-
-const ACTION_LABELS = {
-  create: "Creado",
-  update: "Actualizado",
-  delete: "Eliminado",
-};
-
-const ENTITY_TYPE_LABELS = {
-  entity: "Entidad",
-  claim: "Declaración",
-  qualifier: "Calificador",
-  reference: "Referencia",
-};
-
-const ACTION_COLORS = {
-  create: "action-create",
-  update: "action-update",
-  delete: "action-delete",
-};
 
 export default function AdminPage() {
   const router = useRouter();
@@ -43,15 +20,7 @@ export default function AdminPage() {
     loading: authLoading 
   } = useAuth();
 
-  const [auditLogs, setAuditLogs] = useState([]);
-  const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-
-  // Filtros
-  const [filterAction, setFilterAction] = useState("");
-  const [filterEntityType, setFilterEntityType] = useState("");
 
   // Debug log
   useEffect(() => {
@@ -76,43 +45,9 @@ export default function AdminPage() {
         router.push("/");
         return;
       }
-      loadAuditLog();
-    }
-  }, [authLoading, authEnabled, isAdmin, page, filterAction, filterEntityType]);
-
-  async function loadAuditLog() {
-    setLoading(true);
-    setError(null);
-    try {
-      const filters = {};
-      if (filterAction) filters.action = filterAction;
-      if (filterEntityType) filters.entityType = filterEntityType;
-
-      const result = await getAuditLog(
-        ITEMS_PER_PAGE, 
-        page * ITEMS_PER_PAGE, 
-        filters
-      );
-      setAuditLogs(result.logs);
-      setTotal(result.total);
-    } catch (err) {
-      setError(err);
-    } finally {
       setLoading(false);
     }
-  }
-
-  function nextPage() {
-    if ((page + 1) * ITEMS_PER_PAGE < total) {
-      setPage((p) => p + 1);
-    }
-  }
-
-  function prevPage() {
-    if (page > 0) {
-      setPage((p) => p - 1);
-    }
-  }
+  }, [authLoading, authEnabled, isAdmin]);
 
   if (authLoading) {
     return (
@@ -275,198 +210,12 @@ export default function AdminPage() {
             </div>
           </section>
 
-          {/* Sección de Historial */}
-          <section className="admin-section">
-            <h2 className="section-title">
-              <span className="icon-history"></span>
-              Historial de Cambios
-            </h2>
-
-            {/* Filtros */}
-            <div className="audit-filters">
-              <div className="filter-group">
-                <label className="form-label">Acción</label>
-                <select
-                  className="form-select"
-                  value={filterAction}
-                  onChange={(e) => {
-                    setFilterAction(e.target.value);
-                    setPage(0);
-                  }}
-                >
-                  <option value="">Todas</option>
-                  <option value="create">Crear</option>
-                  <option value="update">Actualizar</option>
-                  <option value="delete">Eliminar</option>
-                </select>
-              </div>
-              <div className="filter-group">
-                <label className="form-label">Tipo</label>
-                <select
-                  className="form-select"
-                  value={filterEntityType}
-                  onChange={(e) => {
-                    setFilterEntityType(e.target.value);
-                    setPage(0);
-                  }}
-                >
-                  <option value="">Todos</option>
-                  <option value="entity">Entidades</option>
-                  <option value="claim">Declaraciones</option>
-                  <option value="qualifier">Calificadores</option>
-                  <option value="reference">Referencias</option>
-                </select>
-              </div>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => {
-                  setFilterAction("");
-                  setFilterEntityType("");
-                  setPage(0);
-                }}
-              >
-                Limpiar filtros
-              </button>
-            </div>
-
-            {loading ? (
-              <LoadingState message="Cargando historial..." />
-            ) : error ? (
-              <ErrorState error={error} onRetry={loadAuditLog} />
-            ) : auditLogs.length === 0 ? (
-              <div className="empty-state">
-                <p>No hay registros en el historial.</p>
-                <p className="text-muted">
-                  Los cambios realizados en entidades, declaraciones, calificadores y referencias aparecerán aquí.
-                </p>
-              </div>
-            ) : (
-              <>
-                <div className="audit-log-table">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Fecha</th>
-                        <th>Acción</th>
-                        <th>Tipo</th>
-                        <th>ID</th>
-                        <th>Usuario</th>
-                        <th>Detalles</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {auditLogs.map((log) => (
-                        <tr key={log.$id}>
-                          <td className="log-date">
-                            {new Date(log.$createdAt).toLocaleString()}
-                          </td>
-                          <td>
-                            <span className={`action-badge ${ACTION_COLORS[log.action] || ""}`}>
-                              {ACTION_LABELS[log.action] || log.action}
-                            </span>
-                          </td>
-                          <td>
-                            {ENTITY_TYPE_LABELS[log.entity_type] || log.entity_type}
-                          </td>
-                          <td className="log-entity-id">
-                            {log.entity_type === "entity" ? (
-                              <Link href={`/entity/${log.entity_id}`}>
-                                {log.entity_id}
-                              </Link>
-                            ) : (
-                              <span>{log.entity_id}</span>
-                            )}
-                          </td>
-                          <td>
-                            {log.user_name || log.user_id || "Sistema"}
-                          </td>
-                          <td>
-                            <LogDetails log={log} />
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-
-                {/* Paginación */}
-                <nav className="pagination">
-                  <button
-                    onClick={prevPage}
-                    disabled={page === 0}
-                    className="pagination-button"
-                  >
-                    Anterior
-                  </button>
-                  <span className="pagination-info">
-                    Página {page + 1} de {Math.ceil(total / ITEMS_PER_PAGE) || 1}
-                  </span>
-                  <button
-                    onClick={nextPage}
-                    disabled={(page + 1) * ITEMS_PER_PAGE >= total}
-                    className="pagination-button"
-                  >
-                    Siguiente
-                  </button>
-                </nav>
-              </>
-            )}
-          </section>
         </div>
       </main>
 
       <footer className="explorer-footer">
         <p>Graph DB Explorer — Panel de Administración</p>
       </footer>
-    </div>
-  );
-}
-
-/**
- * Componente para mostrar detalles del log
- */
-function LogDetails({ log }) {
-  const [expanded, setExpanded] = useState(false);
-
-  const hasDetails = log.previous_data || log.new_data || log.metadata;
-
-  if (!hasDetails) {
-    return <span className="text-muted">—</span>;
-  }
-
-  return (
-    <div className="log-details">
-      <button
-        type="button"
-        className="btn-link"
-        onClick={() => setExpanded(!expanded)}
-      >
-        {expanded ? "Ocultar" : "Ver detalles"}
-      </button>
-      
-      {expanded && (
-        <div className="log-details-content">
-          {log.previous_data && (
-            <div className="log-data-section">
-              <strong>Datos anteriores:</strong>
-              <pre>{JSON.stringify(log.previous_data, null, 2)}</pre>
-            </div>
-          )}
-          {log.new_data && (
-            <div className="log-data-section">
-              <strong>Datos nuevos:</strong>
-              <pre>{JSON.stringify(log.new_data, null, 2)}</pre>
-            </div>
-          )}
-          {log.metadata && (
-            <div className="log-data-section">
-              <strong>Metadata:</strong>
-              <pre>{JSON.stringify(log.metadata, null, 2)}</pre>
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }

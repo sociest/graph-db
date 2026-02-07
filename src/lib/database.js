@@ -388,6 +388,7 @@ export async function getClaim(claimId) {
  */
 export async function createClaim(data, teamId = null) {
   const permissions = generatePermissions(teamId);
+  const datatype = data.datatype ?? (data.value_relation ? "relation" : "string");
   
   const result = await tablesDB.createRow({
     databaseId: DATABASE_ID,
@@ -396,7 +397,7 @@ export async function createClaim(data, teamId = null) {
     data: {
       subject: data.subject || null,
       property: data.property || null,
-      datatype: data.datatype || null,
+      datatype: datatype,
       value_raw: data.value_raw ?? null,
       value_relation: data.value_relation || null,
     },
@@ -435,6 +436,7 @@ export async function getQualifiersByClaim(claimId) {
  */
 export async function createQualifier(data, teamId = null) {
   const permissions = generatePermissions(teamId);
+  const datatype = data.datatype ?? (data.value_relation ? "relation" : "string");
   
   const result = await tablesDB.createRow({
     databaseId: DATABASE_ID,
@@ -443,7 +445,7 @@ export async function createQualifier(data, teamId = null) {
     data: {
       claim: data.claim || null,
       property: data.property || null,
-      datatype: data.datatype || null,
+      datatype: datatype,
       value_raw: data.value_raw ?? null,
       value_relation: data.value_relation || null,
     },
@@ -540,7 +542,11 @@ export async function deleteReference(referenceId) {
 export async function updateQualifier(qualifierId, data) {
   const updateData = {};
   if (data.property !== undefined) updateData.property = data.property;
-  if (data.datatype !== undefined) updateData.datatype = data.datatype;
+  if (data.datatype !== undefined) {
+    updateData.datatype = data.datatype ?? (data.value_relation ? "relation" : "string");
+  } else if (data.value_relation !== undefined) {
+    updateData.datatype = "relation";
+  }
   if (data.value_raw !== undefined) {
     updateData.value_raw = data.value_raw ?? null;
   }
@@ -580,7 +586,11 @@ export async function deleteQualifier(qualifierId) {
 export async function updateClaim(claimId, data) {
   const updateData = {};
   if (data.property !== undefined) updateData.property = data.property;
-  if (data.datatype !== undefined) updateData.datatype = data.datatype;
+  if (data.datatype !== undefined) {
+    updateData.datatype = data.datatype ?? (data.value_relation ? "relation" : "string");
+  } else if (data.value_relation !== undefined) {
+    updateData.datatype = "relation";
+  }
   if (data.value_raw !== undefined) {
     updateData.value_raw = data.value_raw ?? null;
   }
@@ -678,107 +688,6 @@ export function serializeValue(value) {
     return { datatype: value.datatype, value_raw: value.data };
   }
   return { datatype: "string", value_raw: value };
-}
-
-// ============================================
-// AUDIT LOG / HISTORY
-// ============================================
-
-const TABLES_HISTORY = {
-  AUDIT_LOG: "audit_log",
-};
-
-/**
- * Registra una acción en el historial de auditoría
- */
-export async function logAction(action, {
-  entityType,
-  entityId,
-  userId = null,
-  userName = null,
-  previousData = null,
-  newData = null,
-  metadata = null,
-}) {
-  try {
-    await tablesDB.createRow({
-      databaseId: DATABASE_ID,
-      tableId: TABLES_HISTORY.AUDIT_LOG,
-      rowId: "unique()",
-      data: {
-        action, // create, update, delete
-        entity_type: entityType, // entity, claim, qualifier, reference
-        entity_id: entityId,
-        user_id: userId,
-        user_name: userName,
-        previous_data: previousData ? JSON.stringify(previousData) : null,
-        new_data: newData ? JSON.stringify(newData) : null,
-        metadata: metadata ? JSON.stringify(metadata) : null,
-      },
-    });
-  } catch (e) {
-    // Si falla el logging, no interrumpir la operación principal
-    console.error("Error logging action:", e);
-  }
-}
-
-/**
- * Obtiene el historial de cambios con paginación
- */
-export async function getAuditLog(limit = 50, offset = 0, filters = {}) {
-  const queries = [
-    Query.limit(limit),
-    Query.offset(offset),
-    Query.orderDesc("$createdAt"),
-  ];
-
-  // Filtrar por tipo de entidad
-  if (filters.entityType) {
-    queries.push(Query.equal("entity_type", filters.entityType));
-  }
-
-  // Filtrar por ID de entidad
-  if (filters.entityId) {
-    queries.push(Query.equal("entity_id", filters.entityId));
-  }
-
-  // Filtrar por usuario
-  if (filters.userId) {
-    queries.push(Query.equal("user_id", filters.userId));
-  }
-
-  // Filtrar por acción
-  if (filters.action) {
-    queries.push(Query.equal("action", filters.action));
-  }
-
-  try {
-    const result = await tablesDB.listRows({
-      databaseId: DATABASE_ID,
-      tableId: TABLES_HISTORY.AUDIT_LOG,
-      queries,
-    });
-
-    return {
-      logs: result.rows.map((row) => ({
-        ...row,
-        previous_data: row.previous_data ? JSON.parse(row.previous_data) : null,
-        new_data: row.new_data ? JSON.parse(row.new_data) : null,
-        metadata: row.metadata ? JSON.parse(row.metadata) : null,
-      })),
-      total: result.total,
-    };
-  } catch (e) {
-    console.error("Error fetching audit log:", e);
-    return { logs: [], total: 0 };
-  }
-}
-
-/**
- * Obtiene el historial de una entidad específica
- */
-export async function getEntityHistory(entityId, limit = 20) {
-  return getAuditLog(limit, 0, { entityId });
 }
 
 // ============================================

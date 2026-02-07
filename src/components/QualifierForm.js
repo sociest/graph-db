@@ -37,9 +37,14 @@ export default function QualifierForm({
     setError(null);
 
     try {
+      const resolvedDatatype =
+        valueType === "relation"
+          ? "entity"
+          : valueRaw?.datatype || qualifier?.datatype || qualifier?.property?.datatype || "string";
+
       const data = {
         property: property || null,
-        datatype: valueType === "raw" ? valueRaw?.datatype || "string" : null,
+        datatype: resolvedDatatype,
         value_raw: valueType === "raw" ? valueRaw?.data ?? null : null,
         value_relation: valueType === "relation" ? valueRelation : null,
       };

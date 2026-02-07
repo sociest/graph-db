@@ -21,7 +21,6 @@ import {
   createReference,
   updateReference,
   deleteReference,
-  logAction,
 } from "@/lib/database";
 
 export default function EntityPage({ params }) {
@@ -95,27 +94,11 @@ export default function EntityPage({ params }) {
 
   // ==================== ENTITY HANDLERS ====================
   async function handleUpdateEntity(data) {
-    const previousData = { label: entity.label, description: entity.description, aliases: entity.aliases };
     await updateEntity(id, data);
-    await logAction("update", {
-      entityType: "entity",
-      entityId: id,
-      userId: user?.$id,
-      userName: user?.name,
-      previousData,
-      newData: data,
-    });
     await loadEntity();
   }
 
   async function handleDeleteEntity() {
-    await logAction("delete", {
-      entityType: "entity",
-      entityId: id,
-      userId: user?.$id,
-      userName: user?.name,
-      previousData: { label: entity.label, description: entity.description },
-    });
     await deleteEntity(id);
     router.push("/entities");
   }
@@ -123,38 +106,16 @@ export default function EntityPage({ params }) {
   // ==================== CLAIM HANDLERS ====================
   async function handleCreateClaim(data) {
     const teamId = activeTeam?.$id || null;
-    const result = await createClaim(data, teamId);
-    await logAction("create", {
-      entityType: "claim",
-      entityId: result.$id,
-      userId: user?.$id,
-      userName: user?.name,
-      teamId: teamId,
-      newData: data,
-      metadata: { subjectId: id },
-    });
+    await createClaim(data, teamId);
     await loadEntity();
   }
 
   async function handleUpdateClaim(data, claimId) {
     await updateClaim(claimId, data);
-    await logAction("update", {
-      entityType: "claim",
-      entityId: claimId,
-      userId: user?.$id,
-      userName: user?.name,
-      newData: data,
-    });
     await loadEntity();
   }
 
   async function handleDeleteClaim(claimId) {
-    await logAction("delete", {
-      entityType: "claim",
-      entityId: claimId,
-      userId: user?.$id,
-      userName: user?.name,
-    });
     await deleteClaim(claimId);
     await loadEntity();
   }
@@ -162,37 +123,16 @@ export default function EntityPage({ params }) {
   // ==================== QUALIFIER HANDLERS ====================
   async function handleCreateQualifier(data) {
     const teamId = activeTeam?.$id || null;
-    const result = await createQualifier(data, teamId);
-    await logAction("create", {
-      entityType: "qualifier",
-      entityId: result.$id,
-      userId: user?.$id,
-      userName: user?.name,
-      teamId: teamId,
-      newData: data,
-    });
+    await createQualifier(data, teamId);
     await loadEntity();
   }
 
   async function handleUpdateQualifier(data, qualifierId) {
     await updateQualifier(qualifierId, data);
-    await logAction("update", {
-      entityType: "qualifier",
-      entityId: qualifierId,
-      userId: user?.$id,
-      userName: user?.name,
-      newData: data,
-    });
     await loadEntity();
   }
 
   async function handleDeleteQualifier(qualifierId) {
-    await logAction("delete", {
-      entityType: "qualifier",
-      entityId: qualifierId,
-      userId: user?.$id,
-      userName: user?.name,
-    });
     await deleteQualifier(qualifierId);
     await loadEntity();
   }
@@ -200,37 +140,16 @@ export default function EntityPage({ params }) {
   // ==================== REFERENCE HANDLERS ====================
   async function handleCreateReference(data) {
     const teamId = activeTeam?.$id || null;
-    const result = await createReference(data, teamId);
-    await logAction("create", {
-      entityType: "reference",
-      entityId: result.$id,
-      userId: user?.$id,
-      userName: user?.name,
-      teamId: teamId,
-      newData: data,
-    });
+    await createReference(data, teamId);
     await loadEntity();
   }
 
   async function handleUpdateReference(data, referenceId) {
     await updateReference(referenceId, data);
-    await logAction("update", {
-      entityType: "reference",
-      entityId: referenceId,
-      userId: user?.$id,
-      userName: user?.name,
-      newData: data,
-    });
     await loadEntity();
   }
 
   async function handleDeleteReference(referenceId) {
-    await logAction("delete", {
-      entityType: "reference",
-      entityId: referenceId,
-      userId: user?.$id,
-      userName: user?.name,
-    });
     await deleteReference(referenceId);
     await loadEntity();
   }

@@ -983,6 +983,7 @@ export default function ImportPage() {
               claimData = {
                 subject: entityId,
                 property: propertyId,
+                datatype: "relation",
                 value_relation: relationId,
               };
             } else {
@@ -1012,6 +1013,7 @@ export default function ImportPage() {
                     qualifierData = {
                       claim: createdClaim.$id,
                       property: qualifier.propertyId,
+                      datatype: "entity",
                       value_relation: qualifier.value,
                     };
                   } else {
@@ -1076,11 +1078,12 @@ export default function ImportPage() {
           try {
             let staticClaimData;
             
-            if (claim.dataType === "entity") {
+            if (claim.dataType === "relation") {
               // Claim de tipo relación con otra entidad
               staticClaimData = {
                 subject: entityId,
                 property: staticPropertyId,
+                datatype: "relation",
                 value_relation: claim.value, // ID de la entidad relacionada
               };
             } else {

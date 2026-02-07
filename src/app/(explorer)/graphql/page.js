@@ -215,7 +215,7 @@ const MUTATION_EXAMPLES = {
 // Tipos de datos para propiedades
 const PROPERTY_DATATYPES = [
   { id: "string", label: "Texto", icon: "📝" },
-  { id: "entity", label: "Entidad", icon: "🔗" },
+  { id: "relation", label: "Entidad", icon: "🔗" },
   { id: "url", label: "URL", icon: "🌐" },
   { id: "datetime", label: "Fecha/Hora", icon: "📅" },
   { id: "quantity", label: "Cantidad", icon: "🔢" },
