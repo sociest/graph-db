@@ -119,11 +119,66 @@ export default function ValueInput({
         return String(data);
       case "boolean":
         return data ? "true" : "false";
+      case "color":
+        if (Array.isArray(data)) {
+          return data.map((item) => normalizeColorString(item)).filter(Boolean).join(" | ");
+        }
+        return String(data);
       case "json":
         return typeof data === "object" ? JSON.stringify(data, null, 2) : String(data);
       default:
         return String(data);
     }
+  }
+
+  function normalizeColorString(value) {
+    if (value === null || value === undefined) return "";
+    let color = String(value).trim();
+    if (!color) return "";
+    if (!color.startsWith("#") && !color.startsWith("rgb")) {
+      color = `#${color}`;
+    }
+    return color;
+  }
+
+  function parseColorList(value) {
+    if (value === null || value === undefined) return [];
+
+    if (Array.isArray(value)) {
+      return value.map(normalizeColorString).filter(Boolean);
+    }
+
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (!trimmed) return [];
+
+      if (trimmed.startsWith("[")) {
+        try {
+          const parsed = JSON.parse(trimmed);
+          if (Array.isArray(parsed)) {
+            return parsed.map(normalizeColorString).filter(Boolean);
+          }
+        } catch {
+          // Ignorar
+        }
+      }
+
+      const parts = trimmed.split(/[|;\n]+/).map((item) => item.trim()).filter(Boolean);
+      if (parts.length > 1) {
+        return parts.map(normalizeColorString).filter(Boolean);
+      }
+
+      const single = normalizeColorString(trimmed);
+      return single ? [single] : [];
+    }
+
+    const single = normalizeColorString(value);
+    return single ? [single] : [];
+  }
+
+  function serializeColorList(colors) {
+    if (!colors || colors.length === 0) return "";
+    return colors.map(normalizeColorString).filter(Boolean).join(" | ");
   }
 
   function parseDataFromInput(inputValue, type) {
@@ -228,19 +283,99 @@ export default function ValueInput({
         );
 
       case "color":
+        const colors = parseColorList(data);
+
+        const updateColors = (nextColors) => {
+          handleChange(datatype, serializeColorList(nextColors));
+        };
+
         return (
-          <div className="color-input-wrapper">
-            <input
-              type="color"
-              value={data || "#000000"}
-              onChange={(e) => handleChange(datatype, e.target.value)}
-              disabled={disabled}
-            />
-            <input
-              type="text"
-              placeholder="#000000"
-              {...commonProps}
-            />
+          <div className="color-list-wrapper">
+            <div className="color-list">
+              {colors.length === 0 && (
+                <div className="color-list-empty">Sin colores</div>
+              )}
+              {colors.map((color, index) => (
+                <div key={`${color}-${index}`} className="color-list-item">
+                  <input
+                    type="color"
+                    value={color || "#000000"}
+                    onChange={(e) => {
+                      const next = [...colors];
+                      next[index] = normalizeColorString(e.target.value);
+                      updateColors(next);
+                    }}
+                    disabled={disabled}
+                  />
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="#000000"
+                    value={color}
+                    onChange={(e) => {
+                      const next = [...colors];
+                      next[index] = normalizeColorString(e.target.value);
+                      updateColors(next);
+                    }}
+                    disabled={disabled}
+                    required={required && index === 0}
+                  />
+                  <div className="color-list-actions">
+                    <button
+                      type="button"
+                      className="btn-tool"
+                      onClick={() => {
+                        if (index === 0) return;
+                        const next = [...colors];
+                        [next[index - 1], next[index]] = [next[index], next[index - 1]];
+                        updateColors(next);
+                      }}
+                      disabled={disabled || index === 0}
+                      title="Subir"
+                    >
+                      ↑
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-tool"
+                      onClick={() => {
+                        if (index === colors.length - 1) return;
+                        const next = [...colors];
+                        [next[index + 1], next[index]] = [next[index], next[index + 1]];
+                        updateColors(next);
+                      }}
+                      disabled={disabled || index === colors.length - 1}
+                      title="Bajar"
+                    >
+                      ↓
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-tool"
+                      onClick={() => {
+                        const next = colors.filter((_, i) => i !== index);
+                        updateColors(next);
+                      }}
+                      disabled={disabled}
+                      title="Quitar"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="color-list-footer">
+              <button
+                type="button"
+                className="btn-tool"
+                onClick={() => updateColors([...colors, "#000000"])}
+                disabled={disabled}
+              >
+                + Agregar color
+              </button>
+              <span className="color-list-hint">Separar con | o ;</span>
+            </div>
           </div>
         );
 

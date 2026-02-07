@@ -3264,6 +3264,56 @@
   cursor: pointer;
 }
 
+.color-list-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.color-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+}
+
+.color-list-item {
+  display: grid;
+  grid-template-columns: 40px 1fr auto;
+  gap: var(--spacing-sm);
+  align-items: center;
+}
+
+.color-list-item input[type="color"] {
+  width: 40px;
+  height: 38px;
+  padding: 2px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+.color-list-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.color-list-empty {
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+  padding: 6px 0;
+}
+
+.color-list-footer {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.color-list-hint {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+
 /* ============================================
    ENTITY SELECTOR STYLES
    ============================================ */

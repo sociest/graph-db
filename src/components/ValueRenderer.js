@@ -152,6 +152,21 @@ function renderSpecialType(data, compact) {
         </span>
       );
 
+    case "color-list":
+      return (
+        <span className="value-color-list">
+          {data.colors?.map((color, index) => (
+            <span key={`${color.value}-${index}`} className="value-color">
+              <span
+                className="color-swatch"
+                style={{ backgroundColor: color.value }}
+              ></span>
+              <span className="color-code">{color.display}</span>
+            </span>
+          ))}
+        </span>
+      );
+
     case "json":
       return compact ? (
         <span className="value-json-preview">
