@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
+import { uploadGeoJSON } from "@/lib/database";
 
 const DATATYPES = [
   { value: "string", label: "Texto" },
@@ -15,42 +16,6 @@ const DATATYPES = [
   { value: "json", label: "JSON" },
 ];
 
-// Función para simplificar geometrías GeoJSON (algoritmo Douglas-Peucker simplificado)
-function simplifyCoordinates(coords, tolerance) {
-  if (!Array.isArray(coords) || coords.length < 3) return coords;
-  
-  // Si es un array de arrays de coordenadas (MultiPolygon, etc.)
-  if (Array.isArray(coords[0]) && Array.isArray(coords[0][0])) {
-    return coords.map(ring => simplifyCoordinates(ring, tolerance));
-  }
-  
-  // Algoritmo simplificado: mantener cada N puntos
-  const keepEvery = Math.max(1, Math.round(tolerance));
-  const result = [coords[0]]; // Siempre mantener el primer punto
-  
-  for (let i = keepEvery; i < coords.length - 1; i += keepEvery) {
-    result.push(coords[i]);
-  }
-  
-  // Siempre mantener el último punto (para cerrar polígonos)
-  if (coords.length > 1) {
-    result.push(coords[coords.length - 1]);
-  }
-  
-  return result;
-}
-
-function simplifyGeoJSON(geojson, tolerance) {
-  if (!geojson || !geojson.type) return geojson;
-  
-  const simplified = { ...geojson };
-  
-  if (geojson.coordinates) {
-    simplified.coordinates = simplifyCoordinates(geojson.coordinates, tolerance);
-  }
-  
-  return simplified;
-}
 
 /**
  * Input para valores con tipo de dato (value_raw)
@@ -65,11 +30,12 @@ export default function ValueInput({
 }) {
   const [datatype, setDatatype] = useState("string");
   const [data, setData] = useState("");
-  const [simplifyLevel, setSimplifyLevel] = useState(1); // 1 = sin simplificar
-  const [originalData, setOriginalData] = useState(null); // Para guardar el GeoJSON original
+  const [polygonMode, setPolygonMode] = useState("upload");
+  const [polygonUploading, setPolygonUploading] = useState(false);
+  const [polygonError, setPolygonError] = useState(null);
 
   // Calcular tamaño del texto
-  const charCount = data ? data.length : 0;
+  const charCount = typeof data === "string" ? data.length : 0;
   const sizeKB = (charCount / 1024).toFixed(2);
 
   // Parsear valor inicial
@@ -97,6 +63,41 @@ export default function ValueInput({
     }
   }, []);
 
+  useEffect(() => {
+    if (datatype !== "polygon") return;
+    if (data === "" || data === null || data === undefined) return;
+    const nextMode = getPolygonModeFromData(data);
+    setPolygonMode(nextMode);
+  }, [datatype, data]);
+
+  function isUrl(value) {
+    if (typeof value !== "string") return false;
+    try {
+      const url = new URL(value);
+      return url.protocol === "http:" || url.protocol === "https:";
+    } catch {
+      return false;
+    }
+  }
+
+  function getPolygonModeFromData(value) {
+    if (value && typeof value === "object") {
+      if (value.url && !value.fileId) return "url";
+      return "upload";
+    }
+    if (typeof value === "string" && isUrl(value)) {
+      return "url";
+    }
+    return "upload";
+  }
+
+  function getPolygonUrl(value) {
+    if (!value) return "";
+    if (typeof value === "string" && isUrl(value)) return value;
+    if (typeof value === "object" && value.url) return value.url;
+    return "";
+  }
+
   function formatDataForInput(data, type) {
     if (data === null || data === undefined) return "";
     
@@ -114,7 +115,7 @@ export default function ValueInput({
         return String(data);
       case "polygon":
         if (typeof data === "object") {
-          return JSON.stringify(data, null, 2);
+          return data;
         }
         return String(data);
       case "boolean":
@@ -203,6 +204,10 @@ export default function ValueInput({
         }
         return inputValue;
       case "polygon":
+        if (typeof inputValue === "object") return inputValue;
+        if (typeof inputValue === "string" && isUrl(inputValue)) {
+          return { url: inputValue };
+        }
         try {
           return JSON.parse(inputValue);
         } catch {
@@ -219,11 +224,25 @@ export default function ValueInput({
     }
   }
 
+  function normalizeDataForDatatype(nextDatatype, nextData) {
+    if (nextData === null || nextData === undefined) return "";
+    if (typeof nextData === "object") {
+      if (nextDatatype === "polygon" || nextDatatype === "json") return nextData;
+      try {
+        return JSON.stringify(nextData);
+      } catch {
+        return "";
+      }
+    }
+    return nextData;
+  }
+
   function handleChange(newDatatype, newData) {
     setDatatype(newDatatype);
-    setData(newData);
+    const safeData = normalizeDataForDatatype(newDatatype, newData);
+    setData(safeData);
 
-    const parsedData = parseDataFromInput(newData, newDatatype);
+    const parsedData = parseDataFromInput(safeData, newDatatype);
     onChange({
       datatype: newDatatype,
       data: parsedData,
@@ -389,94 +408,114 @@ export default function ValueInput({
         );
 
       case "polygon":
+        const polygonUrl = getPolygonUrl(data);
+        const hasUpload = typeof data === "object" && data?.fileId && data?.bucketId;
+
         return (
           <div className="polygon-input-wrapper">
-            <div className="polygon-toolbar">
-              <div className="polygon-actions">
-                <button
-                  type="button"
-                  className="btn-tool"
-                  onClick={() => {
-                    try {
-                      const parsed = JSON.parse(data);
-                      const compressed = JSON.stringify(parsed);
-                      handleChange(datatype, compressed);
-                    } catch (e) {
-                      // JSON inválido, ignorar
-                    }
-                  }}
-                  disabled={disabled}
-                  title="Comprimir JSON (eliminar espacios)"
-                >
-                  📦 Comprimir
-                </button>
-                <button
-                  type="button"
-                  className="btn-tool"
-                  onClick={() => {
-                    try {
-                      const parsed = JSON.parse(data);
-                      const formatted = JSON.stringify(parsed, null, 2);
-                      handleChange(datatype, formatted);
-                    } catch (e) {
-                      // JSON inválido, ignorar
-                    }
-                  }}
-                  disabled={disabled}
-                  title="Formatear JSON"
-                >
-                  📝 Formatear
-                </button>
-              </div>
-              <div className="polygon-simplify">
-                <label>Simplificar:</label>
+            <div className="polygon-mode">
+              <label className="radio-label">
                 <input
-                  type="range"
-                  min="1"
-                  max="10"
-                  value={simplifyLevel}
-                  onChange={(e) => {
-                    const level = parseInt(e.target.value);
-                    setSimplifyLevel(level);
-                    
+                  type="radio"
+                  name="polygonMode"
+                  value="upload"
+                  checked={polygonMode === "upload"}
+                  onChange={() => setPolygonMode("upload")}
+                  disabled={disabled}
+                />
+                Subir GeoJSON
+              </label>
+              <label className="radio-label">
+                <input
+                  type="radio"
+                  name="polygonMode"
+                  value="url"
+                  checked={polygonMode === "url"}
+                  onChange={() => setPolygonMode("url")}
+                  disabled={disabled}
+                />
+                Enlace
+              </label>
+            </div>
+
+            {polygonMode === "upload" ? (
+              <div className="polygon-upload">
+                <input
+                  type="file"
+                  accept=".geojson,application/geo+json,application/json"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+
+                    setPolygonError(null);
+                    setPolygonUploading(true);
                     try {
-                      // Guardar original si es la primera vez
-                      if (!originalData && level > 1) {
-                        setOriginalData(data);
-                      }
-                      
-                      const sourceData = originalData || data;
-                      const parsed = JSON.parse(sourceData);
-                      
-                      if (level === 1 && originalData) {
-                        // Restaurar original
-                        handleChange(datatype, originalData);
-                      } else if (level > 1) {
-                        const simplified = simplifyGeoJSON(parsed, level);
-                        handleChange(datatype, JSON.stringify(simplified));
-                      }
-                    } catch (e) {
-                      // JSON inválido, ignorar
+                      const content = await file.text();
+                      const parsed = JSON.parse(content);
+                      const uploaded = await uploadGeoJSON(parsed, file.name || "polygon");
+                      handleChange(datatype, {
+                        fileId: uploaded.fileId,
+                        bucketId: uploaded.bucketId,
+                        url: uploaded.url,
+                        name: uploaded.name,
+                        size: uploaded.size,
+                        mimeType: uploaded.mimeType,
+                      });
+                    } catch (err) {
+                      setPolygonError("El archivo no es un GeoJSON válido o no se pudo subir.");
+                    } finally {
+                      setPolygonUploading(false);
+                      e.target.value = "";
                     }
                   }}
-                  disabled={disabled}
-                  title="Reducir cantidad de puntos"
+                  disabled={disabled || polygonUploading}
                 />
-                <span className="simplify-label">{simplifyLevel === 1 ? 'Original' : `÷${simplifyLevel}`}</span>
+
+                {polygonUploading && (
+                  <span className="polygon-upload-status">Subiendo...</span>
+                )}
+
+                {hasUpload && (
+                  <div className="polygon-file-info">
+                    <span>Archivo subido</span>
+                    {data?.url && (
+                      <a href={data.url} target="_blank" rel="noopener noreferrer">
+                        Ver archivo
+                      </a>
+                    )}
+                    <button
+                      type="button"
+                      className="btn-tool"
+                      onClick={() => handleChange(datatype, "")}
+                      disabled={disabled}
+                    >
+                      Quitar
+                    </button>
+                  </div>
+                )}
+
+                {polygonError && (
+                  <div className="form-error">{polygonError}</div>
+                )}
               </div>
-            </div>
-            <textarea
-              className="form-textarea form-textarea-code"
-              placeholder='{"type": "Polygon", "coordinates": [[[lng, lat], [lng, lat], ...]]}'
-              rows={6}
-              {...commonProps}
-            />
-            <div className="char-count">
-              <span className={charCount > 50000 ? 'char-count-warning' : ''}>
-                {charCount.toLocaleString()} caracteres ({sizeKB} KB)
-              </span>
-              {charCount > 50000 && <span className="char-count-hint">⚠️ Considera simplificar la geometría</span>}
-            </div>
+            ) : (
+              <div className="polygon-url-input">
+                <input
+                  type="url"
+                  className="form-input"
+                  placeholder="https://ejemplo.com/archivo.geojson"
+                  value={polygonUrl}
+                  onChange={(e) => handleChange(datatype, e.target.value)}
+                  disabled={disabled}
+                  required={required}
+                />
+                {polygonUrl && (
+                  <a href={polygonUrl} target="_blank" rel="noopener noreferrer">
+                    Ver enlace
+                  </a>
+                )}
+              </div>
+            )}
           </div>
         );
 

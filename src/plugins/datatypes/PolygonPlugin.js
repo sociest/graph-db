@@ -86,9 +86,25 @@ function renderPolygon(data, options = {}) {
     };
   }
 
+  // Si es una referencia por URL directa
+  if (data.url) {
+    return {
+      type: "geometry-file",
+      url: data.url,
+      geometryType: datatype,
+    };
+  }
+
   // Parsear si viene como string
   let coords = data;
   if (typeof data === "string") {
+    if (/^https?:\/\//i.test(data)) {
+      return {
+        type: "geometry-file",
+        url: data,
+        geometryType: datatype,
+      };
+    }
     try {
       const parsed = JSON.parse(data);
       // Soportar GeoJSON completo o solo coordenadas
