@@ -160,8 +160,9 @@ module.exports = async ({ req, res, log, error }) => {
     const userId = body?.userId || body?.user?.$id || null;
     const userName = body?.user?.name || body?.user?.email || null;
     log(`audit-log: userId=${userId} userName=${userName}`);
-
-    const previousData = body?.previousData || null;
+    
+    
+    const previousData = body?.previousData || body || null;
     log(`audit-log: previousData=${previousData ? "present" : "null"}`);
 
     const endpoint =
