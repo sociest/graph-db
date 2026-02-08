@@ -106,14 +106,23 @@ function stripSystemFields(data) {
 
 module.exports = async ({ req, res, log, error }) => {
   try {
+    log("audit-log: start");
+    log(`audit-log: headers=${JSON.stringify(req?.headers || {})}`);
+    log(`audit-log: rawBodyType=${typeof req?.body}`);
+    log(`audit-log: rawBody=${typeof req?.body === "string" ? req.body : JSON.stringify(req?.body || {})}`);
+
     const body = parseBody(req?.body);
+    log(`audit-log: parsedBody=${JSON.stringify(body)}`);
     const eventName = extractEventName(req, body);
     const action = getAction(eventName);
+    log(`audit-log: eventName=${eventName} action=${action}`);
 
     const payload = body?.payload || body?.data || body?.document || null;
     const collectionId = extractCollectionId(payload, eventName);
+    log(`audit-log: collectionId=${collectionId}`);
 
     if (!DATABASE_ID || !collectionId || !action) {
+      log("audit-log: skipped missing database, collection or action");
       return res.json({
         ok: false,
         skipped: true,
@@ -122,11 +131,13 @@ module.exports = async ({ req, res, log, error }) => {
     }
 
     if (collectionId === AUDIT_LOG_TABLE) {
+      log("audit-log: skipped audit log collection");
       return res.json({ ok: true, skipped: true, reason: "audit log" });
     }
 
     const entityType = toEntityType(collectionId);
     if (!entityType) {
+      log("audit-log: skipped untracked collection");
       return res.json({
         ok: true,
         skipped: true,
@@ -135,11 +146,14 @@ module.exports = async ({ req, res, log, error }) => {
     }
 
     const entityId = extractDocumentId(payload, eventName);
+    log(`audit-log: entityType=${entityType} entityId=${entityId}`);
 
     const userId = body?.userId || body?.user?.$id || null;
     const userName = body?.user?.name || body?.user?.email || null;
+    log(`audit-log: userId=${userId} userName=${userName}`);
 
     const previousData = body?.previousData || null;
+    log(`audit-log: previousData=${previousData ? "present" : "null"}`);
 
     const endpoint =
       process.env.APPWRITE_ENDPOINT ||
@@ -152,6 +166,7 @@ module.exports = async ({ req, res, log, error }) => {
       process.env.APPWRITE_FUNCTION_API_KEY;
 
     if (!endpoint || !projectId || !apiKey) {
+      log("audit-log: missing endpoint/project/apiKey");
       return res.json({
         ok: false,
         skipped: true,
@@ -173,6 +188,7 @@ module.exports = async ({ req, res, log, error }) => {
 
     const tablesDB = new sdk.TablesDB(client);
 
+    log("audit-log: writing audit row");
     await tablesDB.createRow({
       databaseId: DATABASE_ID,
       tableId: AUDIT_LOG_TABLE,
@@ -193,10 +209,11 @@ module.exports = async ({ req, res, log, error }) => {
         }),
       },
     });
+    log("audit-log: write successful");
 
     return res.json({ ok: true });
   } catch (err) {
-    error(err);
+    error(`audit-log: error=${String(err)}`);
     return res.json({ ok: false, error: String(err) }, 500);
   }
 };
