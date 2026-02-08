@@ -22,6 +22,7 @@ import {
   isMfaUpdateSupported,
   createUserApiKey,
   isApiKeySupported,
+  isApiKeyGenerationEnabled,
   listUserApiKeys,
   deleteUserApiKey,
   isApiKeyListSupported,
@@ -62,6 +63,7 @@ export default function AccountPage() {
   const [loadingMfa, setLoadingMfa] = useState(false);
   const [mfaUpdateAvailable, setMfaUpdateAvailable] = useState(false);
   const [apiKeyAvailable, setApiKeyAvailable] = useState(false);
+  const [apiKeyGenerationEnabled, setApiKeyGenerationEnabled] = useState(false);
   const [apiKeyListAvailable, setApiKeyListAvailable] = useState(false);
   const [loadingApiKey, setLoadingApiKey] = useState(false);
   const [loadingApiKeys, setLoadingApiKeys] = useState(false);
@@ -93,6 +95,7 @@ export default function AccountPage() {
     if (!isAuthenticated) return;
     setMfaUpdateAvailable(isMfaUpdateSupported());
     setApiKeyAvailable(isApiKeySupported());
+    setApiKeyGenerationEnabled(isApiKeyGenerationEnabled());
     setApiKeyListAvailable(isApiKeyListSupported());
     loadSessions();
     loadIdentities();
@@ -281,6 +284,10 @@ export default function AccountPage() {
   }
 
   async function handleGenerateApiKey() {
+    if (!apiKeyGenerationEnabled) {
+      setError("La generación de API Key está deshabilitada por configuración.");
+      return;
+    }
     setError(null);
     setSuccess(null);
     setLoadingApiKey(true);
@@ -592,7 +599,7 @@ export default function AccountPage() {
                   {!apiKeyAvailable && (
                     <p className="muted">La generación de API Key no está disponible en este SDK.</p>
                   )}
-                  {apiKeyAvailable && (
+                  {apiKeyAvailable && apiKeyGenerationEnabled && (
                     <>
                       <p className="muted">
                         Genera una API Key para insertar datos programáticamente. Esta clave se mostrará solo una vez.
@@ -655,6 +662,9 @@ export default function AccountPage() {
                         )}
                       </div>
                     </>
+                  )}
+                  {apiKeyAvailable && !apiKeyGenerationEnabled && (
+                    <p className="muted">La generación de API Key está deshabilitada por configuración.</p>
                   )}
                 </div>
               </section>

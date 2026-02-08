@@ -193,6 +193,13 @@ export function isApiKeySupported() {
 }
 
 /**
+ * Verifica si está permitido generar API Keys por configuración
+ */
+export function isApiKeyGenerationEnabled() {
+  return process.env.NEXT_PUBLIC_ALLOW_API_KEY_GENERATION === "true";
+}
+
+/**
  * Lista API Keys (tokens) generadas
  */
 export async function listUserApiKeys() {
