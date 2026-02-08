@@ -1165,6 +1165,12 @@ export default function ImportPage() {
   // Formatear valor y subir a bucket si es necesario (versión async)
   // Devuelve { value, uploaded: boolean }
   async function formatValueWithUpload(value, dataType, entityLabel, teamIdParam) {
+    const rawValueStr = value === undefined || value === null ? "" : String(value);
+    const isUrl = /^https?:\/\//i.test(rawValueStr.trim());
+    if ((dataType === "polygon" || dataType === "geojson" || dataType === "json") && isUrl) {
+      return rawValueStr.trim();
+    }
+
     const formattedValue = formatValue(value, dataType);
     const valueStr = typeof formattedValue === "string" ? formattedValue : JSON.stringify(formattedValue);
     
@@ -1182,12 +1188,7 @@ export default function ImportPage() {
           if (importResultsRef.current) {
             importResultsRef.current.filesUploaded = (importResultsRef.current.filesUploaded || 0) + 1;
           }
-          return {
-            fileId: uploaded.fileId,
-            bucketId: uploaded.bucketId,
-            url: uploaded.url,
-            size: uploaded.size,
-          };
+          return uploaded.url || valueStr;
         } else if (dataType === "json") {
           // Subir JSON a su bucket
           const uploaded = await uploadJSON(formattedValue, entityLabel, teamIdParam);
@@ -1195,12 +1196,7 @@ export default function ImportPage() {
           if (importResultsRef.current) {
             importResultsRef.current.filesUploaded = (importResultsRef.current.filesUploaded || 0) + 1;
           }
-          return {
-            fileId: uploaded.fileId,
-            bucketId: uploaded.bucketId,
-            url: uploaded.url,
-            size: uploaded.size,
-          };
+          return uploaded.url || valueStr;
         }
       } catch (uploadErr) {
         console.error("Error uploading to bucket:", uploadErr);

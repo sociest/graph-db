@@ -140,20 +140,35 @@ function normalizeInitialValue(valueRaw, fallbackDatatype) {
     return { datatype: fallbackDatatype, data: "" };
   }
 
+  const normalizePolygon = (value, datatype) => {
+    if (datatype !== "polygon") return value;
+    if (typeof value === "object" && value?.url) return value.url;
+    if (typeof value === "object") {
+      try {
+        return JSON.stringify(value);
+      } catch {
+        return String(value);
+      }
+    }
+    return value;
+  };
+
   if (typeof valueRaw === "object" && valueRaw.datatype !== undefined && valueRaw.data !== undefined) {
-    return { datatype: valueRaw.datatype || fallbackDatatype, data: valueRaw.data };
+    const datatype = valueRaw.datatype || fallbackDatatype;
+    return { datatype, data: normalizePolygon(valueRaw.data, datatype) };
   }
 
   if (typeof valueRaw === "string") {
     try {
       const parsed = JSON.parse(valueRaw);
       if (parsed && typeof parsed === "object" && parsed.datatype !== undefined && parsed.data !== undefined) {
-        return { datatype: parsed.datatype || fallbackDatatype, data: parsed.data };
+        const datatype = parsed.datatype || fallbackDatatype;
+        return { datatype, data: normalizePolygon(parsed.data, datatype) };
       }
     } catch {
       // Ignorar
     }
   }
 
-  return { datatype: fallbackDatatype, data: valueRaw };
+  return { datatype: fallbackDatatype, data: normalizePolygon(valueRaw, fallbackDatatype) };
 }

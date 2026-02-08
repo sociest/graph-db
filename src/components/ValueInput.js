@@ -204,12 +204,20 @@ export default function ValueInput({
         }
         return inputValue;
       case "polygon":
-        if (typeof inputValue === "object") return inputValue;
+        if (typeof inputValue === "object") {
+          if (inputValue?.url && isUrl(inputValue.url)) return inputValue.url;
+          try {
+            return JSON.stringify(inputValue);
+          } catch {
+            return String(inputValue);
+          }
+        }
         if (typeof inputValue === "string" && isUrl(inputValue)) {
-          return { url: inputValue };
+          return inputValue;
         }
         try {
-          return JSON.parse(inputValue);
+          const parsed = JSON.parse(inputValue);
+          return JSON.stringify(parsed);
         } catch {
           return inputValue;
         }
