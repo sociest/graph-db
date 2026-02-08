@@ -104,6 +104,15 @@ function stripSystemFields(data) {
   return output;
 }
 
+function getApiKey(headers) {
+  return (
+    process.env.APPWRITE_API_KEY ||
+    process.env.NEXT_PUBLIC_APPWRITE_API_KEY ||
+    process.env.APPWRITE_FUNCTION_API_KEY ||
+    headers["x-appwrite-key"]
+  );
+}
+
 module.exports = async ({ req, res, log, error }) => {
   try {
     log("audit-log: start");
@@ -161,9 +170,7 @@ module.exports = async ({ req, res, log, error }) => {
     const projectId =
       process.env.APPWRITE_PROJECT_ID ||
       process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID;
-    const apiKey =
-      process.env.APPWRITE_API_KEY ||
-      process.env.APPWRITE_FUNCTION_API_KEY;
+    const apiKey = getApiKey(req?.headers || {});
 
     if (!endpoint || !projectId || !apiKey) {
       log("audit-log: missing endpoint/project/apiKey");
