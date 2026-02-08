@@ -100,6 +100,13 @@ export default function UserMenu({ onLoginClick }) {
           <div className="dropdown-divider"></div>
 
           {isAuthenticated && (
+            <Link href="/account" className="dropdown-item" onClick={() => setShowTeamSelector(false)}>
+              <span className="icon-user"></span>
+              <span>Mi cuenta</span>
+            </Link>
+          )}
+
+          {isAuthenticated && (
             <Link href="/import" className="dropdown-item" onClick={() => setShowTeamSelector(false)}>
               <span className="icon-import"></span>
               <span>Importar</span>

@@ -54,6 +54,23 @@ export function AuthProvider({ children }) {
     }
   }, [authEnabled]);
 
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const storedTheme = typeof window !== "undefined" ? localStorage.getItem("theme") : null;
+    const theme = user?.prefs?.theme || storedTheme || "system";
+    if (theme && theme !== "system") {
+      document.documentElement.setAttribute("data-theme", theme);
+      if (typeof window !== "undefined") {
+        localStorage.setItem("theme", theme);
+      }
+    } else {
+      document.documentElement.removeAttribute("data-theme");
+      if (typeof window !== "undefined") {
+        localStorage.removeItem("theme");
+      }
+    }
+  }, [user]);
+
   async function checkUser() {
     try {
       const currentUser = await getCurrentUser();

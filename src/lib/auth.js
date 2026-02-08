@@ -46,6 +46,204 @@ export async function logout() {
   await account.deleteSession({ sessionId: "current" });
 }
 
+function getAccountMethod(...names) {
+  for (const name of names) {
+    if (typeof account?.[name] === "function") {
+      return account[name].bind(account);
+    }
+  }
+  return null;
+}
+
+async function tryAccountCall(fn, argsObject, argsArray = []) {
+  if (!fn) throw new Error("Función de cuenta no disponible en el SDK");
+  try {
+    if (argsObject !== undefined) {
+      return await fn(argsObject);
+    }
+    return await fn(...argsArray);
+  } catch (error) {
+    if (argsArray?.length) {
+      return await fn(...argsArray);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Actualiza el nombre del usuario
+ */
+export async function updateUserName(name) {
+  const fn = getAccountMethod("updateName");
+  return tryAccountCall(fn, { name }, [name]);
+}
+
+/**
+ * Actualiza el email del usuario
+ */
+export async function updateUserEmail(email, password) {
+  const fn = getAccountMethod("updateEmail");
+  return tryAccountCall(fn, { email, password }, [email, password]);
+}
+
+/**
+ * Actualiza el teléfono del usuario
+ */
+export async function updateUserPhone(phone, password) {
+  const fn = getAccountMethod("updatePhone");
+  return tryAccountCall(fn, { phone, password }, [phone, password]);
+}
+
+/**
+ * Actualiza la contraseña del usuario
+ */
+export async function updateUserPassword(oldPassword, newPassword) {
+  const fn = getAccountMethod("updatePassword");
+  return tryAccountCall(fn, { password: newPassword, oldPassword }, [newPassword, oldPassword]);
+}
+
+/**
+ * Actualiza preferencias del usuario
+ */
+export async function updateUserPrefs(prefs = {}) {
+  const fn = getAccountMethod("updatePrefs", "updatePreferences");
+  return tryAccountCall(fn, { prefs }, [prefs]);
+}
+
+/**
+ * Lista sesiones activas
+ */
+export async function listUserSessions() {
+  const fn = getAccountMethod("listSessions", "getSessions");
+  if (!fn) return [];
+  const result = await tryAccountCall(fn);
+  return result?.sessions || result?.items || [];
+}
+
+/**
+ * Cierra una sesión específica
+ */
+export async function deleteUserSession(sessionId) {
+  const fn = getAccountMethod("deleteSession");
+  return tryAccountCall(fn, { sessionId }, [sessionId]);
+}
+
+/**
+ * Cierra todas las sesiones
+ */
+export async function deleteAllSessions() {
+  const fn = getAccountMethod("deleteSessions");
+  if (!fn) return null;
+  return tryAccountCall(fn);
+}
+
+/**
+ * Lista identidades (métodos de autenticación vinculados)
+ */
+export async function listUserIdentities() {
+  const fn = getAccountMethod("listIdentities", "getIdentities");
+  if (!fn) return [];
+  const result = await tryAccountCall(fn);
+  return result?.identities || result?.items || [];
+}
+
+/**
+ * Elimina una identidad vinculada
+ */
+export async function deleteUserIdentity(identityId) {
+  const fn = getAccountMethod("deleteIdentity");
+  return tryAccountCall(fn, { identityId }, [identityId]);
+}
+
+/**
+ * Inicia un OAuth2 para vincular un proveedor
+ */
+export async function createOAuthSession(provider, success, failure, scopes) {
+  const fn = getAccountMethod("createOAuth2Session");
+  if (!fn) throw new Error("OAuth no disponible en este SDK");
+  const argsObject = { provider, success, failure };
+  if (scopes?.length) argsObject.scopes = scopes;
+  return tryAccountCall(fn, argsObject, [provider, success, failure, scopes]);
+}
+
+/**
+ * Genera una API Key (JWT/Token) para el usuario actual
+ */
+export async function createUserApiKey() {
+  const jwtFn = getAccountMethod("createJWT");
+  if (jwtFn) {
+    const result = await tryAccountCall(jwtFn);
+    return result?.jwt || result?.token || result;
+  }
+
+  const tokenFn = getAccountMethod("createToken");
+  if (tokenFn) {
+    const result = await tryAccountCall(tokenFn, {});
+    return result?.secret || result?.token || result;
+  }
+
+  throw new Error("Generación de API Key no disponible en este SDK");
+}
+
+/**
+ * Verifica si el SDK soporta generación de API Key
+ */
+export function isApiKeySupported() {
+  return !!getAccountMethod("createJWT", "createToken");
+}
+
+/**
+ * Lista API Keys (tokens) generadas
+ */
+export async function listUserApiKeys() {
+  const fn = getAccountMethod("listTokens", "getTokens", "listUserTokens");
+  if (!fn) return [];
+  const result = await tryAccountCall(fn);
+  return result?.tokens || result?.items || [];
+}
+
+/**
+ * Revoca una API Key (token)
+ */
+export async function deleteUserApiKey(tokenId) {
+  const fn = getAccountMethod("deleteToken", "deleteUserToken");
+  if (!fn) throw new Error("Revocación de API Key no disponible en este SDK");
+  return tryAccountCall(fn, { tokenId }, [tokenId]);
+}
+
+/**
+ * Verifica si el SDK soporta listado/revocación de API Keys
+ */
+export function isApiKeyListSupported() {
+  return !!getAccountMethod("listTokens", "getTokens", "listUserTokens") &&
+    !!getAccountMethod("deleteToken", "deleteUserToken");
+}
+
+/**
+ * Lista factores MFA disponibles/estado
+ */
+export async function listMfaFactors() {
+  const fn = getAccountMethod("listMfaFactors", "listMFAFactors");
+  if (!fn) return null;
+  return tryAccountCall(fn);
+}
+
+/**
+ * Actualiza estado MFA de un factor (si el SDK lo permite)
+ */
+export async function updateMfaStatus(factor, status) {
+  const fn = getAccountMethod("updateMfaStatus", "updateMFAStatus", "updateMfa");
+  if (!fn) throw new Error("Actualización MFA no disponible en este SDK");
+  return tryAccountCall(fn, { factor, status }, [factor, status]);
+}
+
+/**
+ * Verifica si el SDK soporta actualización de MFA
+ */
+export function isMfaUpdateSupported() {
+  return !!getAccountMethod("updateMfaStatus", "updateMFAStatus", "updateMfa");
+}
+
 /**
  * Obtiene el usuario actual
  */
