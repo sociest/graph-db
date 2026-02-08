@@ -104,6 +104,46 @@ function stripSystemFields(data) {
   return output;
 }
 
+function getEntityLabel(data) {
+  if (!data || typeof data !== "object") return null;
+  return (
+    data.label ||
+    data.name ||
+    data.title ||
+    data.displayName ||
+    data.value ||
+    null
+  );
+}
+
+function isEntityRef(data) {
+  if (!data || typeof data !== "object") return false;
+  if (!data.$id) return false;
+  return Boolean(getEntityLabel(data));
+}
+
+function reduceRelatedEntities(data, depth = 0) {
+  if (data == null) return data;
+  if (Array.isArray(data)) {
+    return data.map((item) => reduceRelatedEntities(item, depth + 1));
+  }
+  if (typeof data !== "object") return data;
+
+  if (depth > 0 && isEntityRef(data)) {
+    const label = getEntityLabel(data);
+    return {
+      $id: data.$id,
+      label: label,
+    };
+  }
+
+  const output = {};
+  for (const [key, value] of Object.entries(data)) {
+    output[key] = reduceRelatedEntities(value, depth + 1);
+  }
+  return output;
+}
+
 function getApiKey(headers) {
   return (
     process.env.APPWRITE_API_KEY ||
@@ -162,7 +202,7 @@ module.exports = async ({ req, res, log, error }) => {
     log(`audit-log: userId=${userId} userName=${userName}`);
     
     
-    const previousData = body?.previousData || body || null;
+    const previousData = body?.previousData || null;
     log(`audit-log: previousData=${previousData ? "present" : "null"}`);
 
     const endpoint =
@@ -207,8 +247,12 @@ module.exports = async ({ req, res, log, error }) => {
         entity_id: entityId,
         user_id: userId,
         user_name: userName,
-        previous_data: previousData ? JSON.stringify(previousData) : null,
-        new_data: payload ? JSON.stringify(stripSystemFields(payload)) : null,
+        previous_data: previousData
+          ? JSON.stringify(reduceRelatedEntities(previousData))
+          : null,
+        new_data: payload
+          ? JSON.stringify(reduceRelatedEntities(stripSystemFields(payload)))
+          : null,
         metadata: JSON.stringify({
           event: eventName,
           collectionId,
