@@ -21,6 +21,10 @@ export default function EntitySelector({
   const [loading, setLoading] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
   const [selectedEntity, setSelectedEntity] = useState(null);
+  const [page, setPage] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [total, setTotal] = useState(0);
+  const pageSize = 10;
   const containerRef = useRef(null);
   const searchTimeout = useRef(null);
   const isMounted = useRef(true);
@@ -82,14 +86,82 @@ export default function EntitySelector({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  function normalizeText(text) {
+    return String(text || "").toLowerCase().trim();
+  }
+
+  function rankEntity(entity, term) {
+    const termNorm = normalizeText(term);
+    if (!termNorm) return 0;
+    const label = normalizeText(entity.label || "");
+    const aliases = Array.isArray(entity.aliases)
+      ? entity.aliases.map((a) => normalizeText(a))
+      : [];
+    const desc = normalizeText(entity.description || "");
+
+    if (label === termNorm) return 100;
+    if (aliases.includes(termNorm)) return 95;
+    if (label.startsWith(termNorm)) return 80;
+    if (aliases.some((a) => a.startsWith(termNorm))) return 75;
+    if (label.includes(termNorm)) return 60;
+    if (aliases.some((a) => a.includes(termNorm))) return 55;
+    if (desc.includes(termNorm)) return 40;
+    if (normalizeText(entity.$id).includes(termNorm)) return 30;
+    return 0;
+  }
+
+  function mergeUniqueEntities(existing, next) {
+    const map = new Map(existing.map((item) => [item.$id, item]));
+    next.forEach((item) => map.set(item.$id, item));
+    return Array.from(map.values());
+  }
+
+  async function searchEntitiesPage(term, nextPage = 0) {
+    const trimmed = term.trim();
+    if (trimmed.length < 2) return { rows: [], total: 0 };
+    const offset = nextPage * pageSize;
+
+    const primary = await searchEntities(trimmed, pageSize, offset);
+    const rowsPrimary = primary?.rows || [];
+    let rows = rowsPrimary;
+    let totalCount = primary?.total || rowsPrimary.length || 0;
+
+    const lower = trimmed.toLowerCase();
+    if (lower !== trimmed) {
+      const secondary = await searchEntities(lower, pageSize, offset);
+      const rowsSecondary = secondary?.rows || [];
+      rows = mergeUniqueEntities(rows, rowsSecondary);
+      totalCount = Math.max(totalCount, secondary?.total || rowsSecondary.length || 0);
+    }
+
+    return { rows, total: totalCount };
+  }
+
+  async function trySearchById(term) {
+    const normalized = term.trim();
+    if (!normalized) return null;
+    if (!/^[a-zA-Z0-9]{18,}$/.test(normalized)) return null;
+    try {
+      const { getEntity } = await import("@/lib/database");
+      const entity = await getEntity(normalized, false);
+      return entity || null;
+    } catch {
+      return null;
+    }
+  }
+
   // Búsqueda con debounce
   useEffect(() => {
     if (searchTimeout.current) {
       clearTimeout(searchTimeout.current);
     }
 
-    if (searchTerm.length < 2) {
+    const trimmed = searchTerm.trim();
+    if (trimmed.length < 2) {
       setResults([]);
+      setPage(0);
+      setHasMore(false);
+      setTotal(0);
       return;
     }
 
@@ -100,21 +172,33 @@ export default function EntitySelector({
       
       setLoading(true);
       try {
-        const result = await searchEntities(searchTerm, 10);
+        const result = await searchEntitiesPage(trimmed, 0);
         if (!isMounted.current || cancelled) return;
-        
-        // Verificar que el resultado tenga rows
         const rows = result?.rows || [];
-        // Filtrar entidades excluidas
         const excludeSet = new Set(excludeIdsKey.split(",").filter(Boolean));
-        const filtered = rows.filter(
-          (entity) => !excludeSet.has(entity.$id)
-        );
+        let filtered = rows.filter((entity) => !excludeSet.has(entity.$id));
+
+        const idMatch = await trySearchById(trimmed);
+        if (idMatch && !excludeSet.has(idMatch.$id)) {
+          filtered = mergeUniqueEntities([idMatch], filtered);
+        }
+
+        filtered = filtered
+          .map((entity) => ({ entity, score: rankEntity(entity, trimmed) }))
+          .sort((a, b) => b.score - a.score)
+          .map((item) => item.entity);
+
         setResults(filtered);
+        setPage(0);
+        setTotal(result?.total || filtered.length);
+        setHasMore((pageSize * 1) < (result?.total || filtered.length));
       } catch (e) {
         console.error("Error searching entities:", e);
         if (isMounted.current && !cancelled) {
           setResults([]);
+          setPage(0);
+          setHasMore(false);
+          setTotal(0);
         }
       } finally {
         if (isMounted.current && !cancelled) {
@@ -130,6 +214,33 @@ export default function EntitySelector({
       }
     };
   }, [searchTerm, excludeIdsKey]);
+
+  const loadMore = useCallback(async () => {
+    const trimmed = searchTerm.trim();
+    if (trimmed.length < 2) return;
+    const nextPage = page + 1;
+    setLoading(true);
+    try {
+      const result = await searchEntitiesPage(trimmed, nextPage);
+      const rows = result?.rows || [];
+      const excludeSet = new Set(excludeIdsKey.split(",").filter(Boolean));
+      let filtered = rows.filter((entity) => !excludeSet.has(entity.$id));
+
+      const merged = mergeUniqueEntities(results, filtered)
+        .map((entity) => ({ entity, score: rankEntity(entity, trimmed) }))
+        .sort((a, b) => b.score - a.score)
+        .map((item) => item.entity);
+
+      setResults(merged);
+      setPage(nextPage);
+      setTotal(result?.total || merged.length);
+      setHasMore((pageSize * (nextPage + 1)) < (result?.total || merged.length));
+    } catch (e) {
+      console.error("Error loading more entities:", e);
+    } finally {
+      setLoading(false);
+    }
+  }, [searchTerm, page, excludeIdsKey, results]);
 
   function handleSelect(entity) {
     setSelectedEntity(entity);
@@ -193,27 +304,42 @@ export default function EntitySelector({
               {loading ? (
                 <div className="entity-search-loading">Buscando...</div>
               ) : results.length > 0 ? (
-                <ul className="entity-search-results">
-                  {results.map((entity) => (
-                    <li key={entity.$id}>
-                      <button
-                        type="button"
-                        className="entity-search-result"
-                        onClick={() => handleSelect(entity)}
-                      >
-                        <span className="result-id">{entity.$id}</span>
-                        <span className="result-label">
-                          {entity.label || "(Sin etiqueta)"}
-                        </span>
-                        {entity.description && (
-                          <span className="result-description">
-                            {entity.description}
+                <>
+                  <ul className="entity-search-results">
+                    {results.map((entity) => (
+                      <li key={entity.$id}>
+                        <button
+                          type="button"
+                          className="entity-search-result"
+                          onClick={() => handleSelect(entity)}
+                        >
+                          <span className="result-id">{entity.$id}</span>
+                          <span className="result-label">
+                            {entity.label || "(Sin etiqueta)"}
                           </span>
-                        )}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
+                          {entity.description && (
+                            <span className="result-description">
+                              {entity.description}
+                            </span>
+                          )}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="entity-search-pagination">
+                    <span>
+                      {Math.min(results.length, total)} de {total}
+                    </span>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={loadMore}
+                      disabled={!hasMore || loading}
+                    >
+                      {loading ? "Cargando..." : "Cargar más"}
+                    </button>
+                  </div>
+                </>
               ) : searchTerm.length >= 2 ? (
                 <div className="entity-search-empty">
                   No se encontraron entidades
