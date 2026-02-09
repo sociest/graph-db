@@ -581,6 +581,12 @@ export async function getClaim(claimId) {
 export async function createClaim(data, teamId = null) {
   const permissions = generatePermissions(teamId);
   const datatype = data.datatype ?? (data.value_relation ? "relation" : "string");
+  const valueRaw =
+    data.value_raw === undefined || data.value_raw === null
+      ? null
+      : typeof data.value_raw === "string"
+      ? data.value_raw
+      : JSON.stringify(data.value_raw);
 
   return runWithTransaction("createClaim", async (transactionId) => {
     const result = await tablesDB.createRow({
@@ -591,7 +597,7 @@ export async function createClaim(data, teamId = null) {
         subject: data.subject || null,
         property: data.property || null,
         datatype: datatype,
-        value_raw: data.value_raw ?? null,
+        value_raw: valueRaw,
         value_relation: data.value_relation || null,
       },
       permissions,
@@ -643,6 +649,12 @@ export async function getQualifiersByClaim(claimId) {
 export async function createQualifier(data, teamId = null) {
   const permissions = generatePermissions(teamId);
   const datatype = data.datatype ?? (data.value_relation ? "relation" : "string");
+  const valueRaw =
+    data.value_raw === undefined || data.value_raw === null
+      ? null
+      : typeof data.value_raw === "string"
+      ? data.value_raw
+      : JSON.stringify(data.value_raw);
 
   return runWithTransaction("createQualifier", async (transactionId) => {
     const result = await tablesDB.createRow({
@@ -653,7 +665,7 @@ export async function createQualifier(data, teamId = null) {
         claim: data.claim || null,
         property: data.property || null,
         datatype: datatype,
-        value_raw: data.value_raw ?? null,
+        value_raw: valueRaw,
         value_relation: data.value_relation || null,
       },
       permissions,
@@ -845,7 +857,12 @@ export async function updateQualifier(qualifierId, data) {
     updateData.datatype = "relation";
   }
   if (data.value_raw !== undefined) {
-    updateData.value_raw = data.value_raw ?? null;
+    updateData.value_raw =
+      data.value_raw === null || data.value_raw === undefined
+        ? null
+        : typeof data.value_raw === "string"
+        ? data.value_raw
+        : JSON.stringify(data.value_raw);
   }
   if (data.value_relation !== undefined) updateData.value_relation = data.value_relation;
 
@@ -952,7 +969,12 @@ export async function updateClaim(claimId, data) {
     updateData.datatype = "relation";
   }
   if (data.value_raw !== undefined) {
-    updateData.value_raw = data.value_raw ?? null;
+    updateData.value_raw =
+      data.value_raw === null || data.value_raw === undefined
+        ? null
+        : typeof data.value_raw === "string"
+        ? data.value_raw
+        : JSON.stringify(data.value_raw);
   }
   if (data.value_relation !== undefined) updateData.value_relation = data.value_relation;
 
