@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
-import { Navigation } from "@/components";
+import { EntitySelector, Navigation } from "@/components";
 import "./style.css";
 
 const DEFAULT_FIELDS = [
@@ -11,7 +11,7 @@ const DEFAULT_FIELDS = [
 ];
 
 const DEFAULT_MATCH_RULES = [
-  { id: "rule-1", field: "label", operator: "contains", valueExpr: "{{label}}" },
+  { id: "rule-1", propertyId: null, value: "", matchMode: "contains" },
 ];
 
 const DEFAULT_COMPUTED = [
@@ -41,6 +41,12 @@ export default function ImportPage() {
   const [isDetectingColumns, setIsDetectingColumns] = useState(false);
   const [detectError, setDetectError] = useState("");
   const [matchRules, setMatchRules] = useState(DEFAULT_MATCH_RULES);
+  const [basicSearchText, setBasicSearchText] = useState("");
+  const [basicSearchFields, setBasicSearchFields] = useState({
+    label: true,
+    aliases: true,
+    description: true,
+  });
   const [onMissingEntity, setOnMissingEntity] = useState("create");
   const [computedFields, setComputedFields] = useState(DEFAULT_COMPUTED);
   const [claims, setClaims] = useState(DEFAULT_CLAIMS);
@@ -262,7 +268,7 @@ export default function ImportPage() {
   function addMatchRule() {
     setMatchRules((prev) => [
       ...prev,
-      { id: `rule-${Date.now()}`, field: "", operator: "equals", valueExpr: "" },
+      { id: `rule-${Date.now()}`, propertyId: null, value: "", matchMode: "contains" },
     ]);
   }
 
@@ -405,6 +411,8 @@ export default function ImportPage() {
           dateFormat,
           fields,
           matchRules,
+          basicSearchText,
+          basicSearchFields,
           onMissingEntity,
           computedFields,
           claims,
@@ -420,6 +428,8 @@ export default function ImportPage() {
       dateFormat,
       fields,
       matchRules,
+      basicSearchText,
+      basicSearchFields,
       onMissingEntity,
       computedFields,
       claims,
@@ -621,6 +631,62 @@ export default function ImportPage() {
                   </button>
                 </div>
 
+                <div className="form-grid">
+                  <div className="form-group full">
+                    <label>Búsqueda convencional</label>
+                    <input
+                      type="text"
+                      value={basicSearchText}
+                      onChange={(event) => setBasicSearchText(event.target.value)}
+                      placeholder="Buscar por label, aliases o descripción"
+                    />
+                  </div>
+                  <div className="form-group full">
+                    <label>Campos a incluir</label>
+                    <div className="checkbox-group">
+                      <label className="checkbox-row">
+                        <input
+                          type="checkbox"
+                          checked={basicSearchFields.label}
+                          onChange={(event) =>
+                            setBasicSearchFields((prev) => ({
+                              ...prev,
+                              label: event.target.checked,
+                            }))
+                          }
+                        />
+                        Label
+                      </label>
+                      <label className="checkbox-row">
+                        <input
+                          type="checkbox"
+                          checked={basicSearchFields.aliases}
+                          onChange={(event) =>
+                            setBasicSearchFields((prev) => ({
+                              ...prev,
+                              aliases: event.target.checked,
+                            }))
+                          }
+                        />
+                        Aliases
+                      </label>
+                      <label className="checkbox-row">
+                        <input
+                          type="checkbox"
+                          checked={basicSearchFields.description}
+                          onChange={(event) =>
+                            setBasicSearchFields((prev) => ({
+                              ...prev,
+                              description: event.target.checked,
+                            }))
+                          }
+                        />
+                        Description
+                      </label>
+                    </div>
+                  </div>
+                </div>
+
                 {matchRules.length === 0 ? (
                   <div className="empty-state">Agrega condiciones para buscar coincidencias.</div>
                 ) : (
@@ -628,43 +694,41 @@ export default function ImportPage() {
                     {matchRules.map((rule, index) => (
                       <div key={rule.id} className="condition-row">
                         {index > 0 && <span className="condition-pill">AND</span>}
-                        <div className="form-group">
-                          <label>Campo</label>
-                          <select
-                            value={rule.field}
-                            onChange={(event) => updateMatchRule(rule.id, { field: event.target.value })}
-                          >
-                            <option value="">Selecciona un campo</option>
-                            {availableFields.map((field) => (
-                              <option key={field} value={field}>
-                                {field}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                        <div className="form-group">
-                          <label>Operador</label>
-                          <select
-                            value={rule.operator}
-                            onChange={(event) => updateMatchRule(rule.id, { operator: event.target.value })}
-                          >
-                            <option value="equals">Igual</option>
-                            <option value="contains">Contiene</option>
-                            <option value="starts">Empieza con</option>
-                            <option value="ends">Termina con</option>
-                          </select>
-                        </div>
-                        <div className="form-group">
-                          <label>Expresión</label>
-                          <input
-                            type="text"
-                            value={rule.valueExpr}
-                            onChange={(event) => updateMatchRule(rule.id, { valueExpr: event.target.value })}
-                            placeholder="{{label}}"
+                        <div className="condition-field">
+                          <label>Propiedad</label>
+                          <EntitySelector
+                            value={rule.propertyId}
+                            onChange={(value) => updateMatchRule(rule.id, { propertyId: value })}
+                            placeholder="Buscar propiedad..."
                           />
                         </div>
-                        <button type="button" className="btn-icon" onClick={() => removeMatchRule(rule.id)}>
-                          <span className="icon-trash"></span>
+                        <div className="condition-field">
+                          <label>Valor</label>
+                          <input
+                            type="text"
+                            value={rule.value}
+                            onChange={(event) => updateMatchRule(rule.id, { value: event.target.value })}
+                            placeholder="Ej: 2026 o {{campo}}"
+                            disabled={!rule.propertyId}
+                          />
+                        </div>
+                        <div className="condition-field">
+                          <label>Operador</label>
+                          <select
+                            value={rule.matchMode || "contains"}
+                            onChange={(event) => updateMatchRule(rule.id, { matchMode: event.target.value })}
+                          >
+                            <option value="contains">Contiene</option>
+                            <option value="equal">Igual</option>
+                          </select>
+                        </div>
+                        <button
+                          type="button"
+                          className="btn-remove-condition"
+                          onClick={() => removeMatchRule(rule.id)}
+                          title="Eliminar condición"
+                        >
+                          ✕
                         </button>
                       </div>
                     ))}
@@ -802,7 +866,7 @@ export default function ImportPage() {
               <div className="section-card">
                 <div className="section-header">
                   <div>
-                    <h2 className="section-title">3. Campos calculados</h2>
+                    <h2 className="section-title">4. Campos calculados</h2>
                     <p className="section-subtitle">
                       Define fórmulas o scripts JS reutilizables para claims, qualifiers y references.
                     </p>

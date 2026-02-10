@@ -216,6 +216,12 @@
   font-weight: 500;
 }
 
+.checkbox-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
 .helper-text {
   font-size: 0.8rem;
   color: var(--color-text-muted);
@@ -319,19 +325,88 @@
 
 .condition-row {
   display: grid;
-  grid-template-columns: auto 1fr 1fr 1.2fr auto;
+  grid-template-columns: auto 1fr 1fr 0.8fr auto;
   gap: var(--spacing-sm);
   align-items: end;
 }
 
 .condition-pill {
-  align-self: center;
-  background: var(--color-bg-alt);
-  color: var(--color-text-secondary);
-  padding: 0.25rem 0.6rem;
+  padding: 0.25rem 0.5rem;
   border-radius: 999px;
-  font-size: 0.75rem;
-  font-weight: 600;
+  background: rgba(6, 69, 173, 0.08);
+  color: var(--color-primary);
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.condition-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.condition-field label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.condition-field input,
+.condition-field select {
+  width: 100%;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--color-border-light);
+  border-radius: 10px;
+  font-size: 0.875rem;
+  background: var(--color-bg-card);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.condition-field input:focus,
+.condition-field select:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(6, 69, 173, 0.15);
+}
+
+.condition-field .entity-selector {
+  width: 100%;
+}
+
+.condition-field .entity-search-wrapper .form-input {
+  width: 100%;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--color-border-light);
+  border-radius: 10px;
+  font-size: 0.875rem;
+  background: var(--color-bg-card);
+}
+
+.condition-field .entity-search-wrapper .form-input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(6, 69, 173, 0.15);
+}
+
+.btn-remove-condition {
+  padding: 0.45rem;
+  background: var(--color-bg-alt);
+  border: 1px solid transparent;
+  border-radius: 10px;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  font-size: 1rem;
+  line-height: 1;
+  transition: all 0.2s;
+}
+
+.btn-remove-condition:hover {
+  background: rgba(211, 51, 51, 0.1);
+  color: var(--color-error);
 }
 
 .computed-list {
@@ -501,7 +576,7 @@
   }
 
   .condition-row {
-    grid-template-columns: 1fr;
+    grid-template-columns: auto 1fr;
   }
 
   .computed-card {
@@ -510,6 +585,14 @@
 
   .inline-row {
     grid-template-columns: 1fr;
+  }
+
+  .condition-pill {
+    justify-self: start;
+  }
+
+  .btn-remove-condition {
+    justify-self: end;
   }
 
   .preview-header,
