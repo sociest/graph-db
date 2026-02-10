@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import { EntitySelector, Navigation } from "@/components";
+import { runImportFromConfigWithFile } from "@/lib/database";
 import "./style.css";
 
 const DEFAULT_FIELDS = [
@@ -68,6 +69,12 @@ export default function ImportPage() {
     qualifiers: [{ property: "P2", valueExpr: "{{fecha}}" }],
     references: [{ property: "P3", valueExpr: "{{fuente}}" }],
   });
+  const [importResult, setImportResult] = useState(null);
+  const [importLoading, setImportLoading] = useState(false);
+  const [importError, setImportError] = useState("");
+  const [reconciliationItems, setReconciliationItems] = useState([]);
+  const [reconciliationDecisions, setReconciliationDecisions] = useState({});
+  const [importFinalized, setImportFinalized] = useState(false);
 
   const steps = [
     {
@@ -474,6 +481,43 @@ export default function ImportPage() {
     setClaims(Array.isArray(config.claims) ? config.claims : DEFAULT_CLAIMS);
   }
 
+  async function handleRunImport() {
+    setImportLoading(true);
+    setImportError("");
+    setImportResult(null);
+    setImportFinalized(false);
+    try {
+      if (!file) {
+        throw new Error("Debes seleccionar un archivo para importar");
+      }
+      const result = await runImportFromConfigWithFile(configObject, file);
+      const resultItems = Array.isArray(result?.reconciliationItems) ? result.reconciliationItems : [];
+      const initialDecisions = resultItems.reduce((acc, item) => {
+        acc[item.id] = item.suggested || "review";
+        return acc;
+      }, {});
+      setImportResult(result);
+      setReconciliationItems(resultItems);
+      setReconciliationDecisions(initialDecisions);
+      setStep(2);
+    } catch (error) {
+      setImportError(error?.message || "Error al ejecutar la importación.");
+    } finally {
+      setImportLoading(false);
+    }
+  }
+
+  function handleDecisionChange(itemId, value) {
+    setReconciliationDecisions((prev) => ({
+      ...prev,
+      [itemId]: value,
+    }));
+  }
+
+  function handleFinalizeImport() {
+    setImportFinalized(true);
+  }
+
   function handleDownloadConfig() {
     const blob = new Blob([JSON.stringify(configObject, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -514,9 +558,6 @@ export default function ImportPage() {
               </p>
             </div>
             <div className="page-header-actions">
-              <button type="button" className="btn btn-secondary">
-                Guardar borrador
-              </button>
               <label className="btn btn-secondary file-button">
                 Cargar JSON
                 <input type="file" accept="application/json,.json" onChange={handleLoadConfig} />
@@ -524,10 +565,24 @@ export default function ImportPage() {
               <button type="button" className="btn btn-secondary" onClick={handleDownloadConfig}>
                 Descargar JSON
               </button>
-              <button type="button" className="btn btn-primary">
-                Ejecutar importación
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={handleRunImport}
+                disabled={importLoading}
+              >
+                {importLoading ? "Ejecutando..." : "Ejecutar importación"}
               </button>
             </div>
+            {(importLoading || importError || importResult) && (
+              <div className="import-status">
+                {importLoading && <span>Ejecutando importación...</span>}
+                {importError && <span className="error">{importError}</span>}
+                {importResult && !importLoading && !importError && (
+                  <span className="success">Importación configurada.</span>
+                )}
+              </div>
+            )}
           </header>
 
           <section className="stepper">
@@ -952,35 +1007,112 @@ export default function ImportPage() {
                   </div>
                 </div>
 
-                <div className="reconcile-preview">
-                  <h3 className="section-title">Vista previa de reconciliación</h3>
-                  <div className="preview-table">
-                    <div className="preview-header">
-                      <span>Registro</span>
-                      <span>Mejor coincidencia</span>
-                      <span>Confianza</span>
-                      <span>Acción</span>
+                {importResult?.reconciliation && (
+                  <div className="section-card light reconciliation-summary">
+                    <h3 className="section-title">Reconciliación configurada</h3>
+                    <div className="summary-grid">
+                      <div>
+                        <span className="summary-label">Modo</span>
+                        <span>{importResult.reconciliation.mode}</span>
+                      </div>
+                      <div>
+                        <span className="summary-label">Umbral</span>
+                        <span>{importResult.reconciliation.confidenceThreshold}</span>
+                      </div>
+                      <div>
+                        <span className="summary-label">Acción sin match</span>
+                        <span>{importResult.reconciliation.onMissingEntity}</span>
+                      </div>
+                      <div>
+                        <span className="summary-label">Auto merge</span>
+                        <span>
+                          {importResult.reconciliation.actions.autoMergeHigh ? "Sí" : "No"}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="summary-label">Auto crear</span>
+                        <span>
+                          {importResult.reconciliation.actions.autoCreateNoMatch ? "Sí" : "No"}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="summary-label">Auto omitir</span>
+                        <span>
+                          {importResult.reconciliation.actions.autoSkipLow ? "Sí" : "No"}
+                        </span>
+                      </div>
                     </div>
-                    <div className="preview-row">
-                      <span>Municipalidad de Lima</span>
-                      <span>Q123 · Municipalidad Metropolitana de Lima</span>
-                      <span>0.92</span>
-                      <span className="pill success">Fusionar</span>
-                    </div>
-                    <div className="preview-row">
-                      <span>Municipalidad de Surco</span>
-                      <span>—</span>
-                      <span>0.12</span>
-                      <span className="pill warning">Crear</span>
-                    </div>
-                    <div className="preview-row">
-                      <span>Municipalidad de Rimac</span>
-                      <span>Q998 · Municipio del Rímac</span>
-                      <span>0.61</span>
-                      <span className="pill neutral">Revisar</span>
+                    <div className="summary-meta">
+                      Condiciones: {importResult.reconciliation.matchRules.length} ·
+                      Búsqueda básica: {importResult.reconciliation.basicSearch.text || "(vacío)"}
                     </div>
                   </div>
-                </div>
+                )}
+
+                {importResult && reconciliationItems.length > 0 && (
+                  <div className="section-card reconciliation-decisions">
+                    <div className="section-header">
+                      <div>
+                        <h3 className="section-title">Reconciliación de registros</h3>
+                        <p className="section-subtitle">
+                          Ajusta la decisión por registro antes de finalizar.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={handleFinalizeImport}
+                        disabled={importFinalized}
+                      >
+                        {importFinalized ? "Importación finalizada" : "Finalizar importación"}
+                      </button>
+                    </div>
+
+                    <div className="reconcile-list">
+                      <div className="reconcile-header">
+                        <span>Registro</span>
+                        <span>Mejor coincidencia</span>
+                        <span>Confianza</span>
+                        <span>Decisión</span>
+                      </div>
+                      {reconciliationItems.map((item) => (
+                        <div key={item.id} className="reconcile-row">
+                          <div>
+                            <strong>{item.recordLabel}</strong>
+                          </div>
+                          <div>{item.matchLabel || "—"}</div>
+                          <div>{item.confidence.toFixed(2)}</div>
+                          <div>
+                            <select
+                              value={reconciliationDecisions[item.id] || "review"}
+                              onChange={(event) => handleDecisionChange(item.id, event.target.value)}
+                              disabled={importFinalized}
+                            >
+                              <option value="merge">Fusionar</option>
+                              <option value="create">Crear</option>
+                              <option value="skip">Omitir</option>
+                              <option value="review">Revisar</option>
+                            </select>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {importFinalized && (
+                      <div className="finalize-note">
+                        Se aplicaron las decisiones de reconciliación. Puedes continuar con los claims.
+                      </div>
+                    )}
+                  </div>
+                )}
+                {importResult && reconciliationItems.length === 0 && (
+                  <div className="section-card light reconciliation-empty">
+                    <h3 className="section-title">Sin registros para reconciliar</h3>
+                    <p className="section-subtitle">
+                      Ejecuta la importación con datos para ver coincidencias reales.
+                    </p>
+                  </div>
+                )}
               </div>
             </section>
           )}
