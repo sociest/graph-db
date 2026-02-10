@@ -525,7 +525,7 @@ export default function ImportPage() {
     if (index <= step) return true;
     if (index <= 2) return true;
     if (index === 3) return !!importResult;
-    if (index === 4) return importFinalized;
+    if (index === 4) return !!importResult;
     if (index === 5) return importFinalized;
     return false;
   }
@@ -1015,57 +1015,6 @@ export default function ImportPage() {
                     </label>
                   </div>
                 </div>
-
-                {importResult?.reconciliation && (
-                  <div className="section-card light reconciliation-summary">
-                    <h3 className="section-title">Reconciliación configurada</h3>
-                    <div className="summary-grid">
-                      <div>
-                        <span className="summary-label">Modo</span>
-                        <span>{importResult.reconciliation.mode}</span>
-                      </div>
-                      <div>
-                        <span className="summary-label">Umbral</span>
-                        <span>{importResult.reconciliation.confidenceThreshold}</span>
-                      </div>
-                      <div>
-                        <span className="summary-label">Acción sin match</span>
-                        <span>{importResult.reconciliation.onMissingEntity}</span>
-                      </div>
-                      <div>
-                        <span className="summary-label">Auto merge</span>
-                        <span>
-                          {importResult.reconciliation.actions.autoMergeHigh ? "Sí" : "No"}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="summary-label">Auto crear</span>
-                        <span>
-                          {importResult.reconciliation.actions.autoCreateNoMatch ? "Sí" : "No"}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="summary-label">Auto omitir</span>
-                        <span>
-                          {importResult.reconciliation.actions.autoSkipLow ? "Sí" : "No"}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="summary-meta">
-                      Condiciones: {importResult.reconciliation.matchRules.length} ·
-                      Búsqueda básica: {importResult.reconciliation.basicSearch.text || "(vacío)"}
-                    </div>
-                  </div>
-                )}
-
-                {importResult && reconciliationItems.length === 0 && (
-                  <div className="section-card light reconciliation-empty">
-                    <h3 className="section-title">Sin registros para reconciliar</h3>
-                    <p className="section-subtitle">
-                      Ejecuta la importación con datos para ver coincidencias reales.
-                    </p>
-                  </div>
-                )}
               </div>
             </section>
           )}
@@ -1343,10 +1292,19 @@ export default function ImportPage() {
                   handleFinalizeImport();
                   return;
                 }
+                if (step === steps.length - 1) {
+                  // Opcional: aquí puedes reiniciar el flujo o cerrar el modal, según UX deseada
+                  setStep(0);
+                  setFile(null);
+                  setImportResult(null);
+                  setImportFinalized(false);
+                  setReconciliationItems([]);
+                  setReconciliationDecisions({});
+                  return;
+                }
                 setStep((prev) => Math.min(prev + 1, steps.length - 1));
               }}
               disabled={
-                step === steps.length - 1 ||
                 (step === 1 && importLoading)
               }
             >
