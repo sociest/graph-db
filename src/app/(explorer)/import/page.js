@@ -48,6 +48,11 @@ export default function ImportPage() {
     description: true,
   });
   const [onMissingEntity, setOnMissingEntity] = useState("create");
+  const [newEntityTemplate, setNewEntityTemplate] = useState({
+    label: "{{label}}",
+    description: "{{descripcion}}",
+    aliases: "{{aliases}}",
+  });
   const [computedFields, setComputedFields] = useState(DEFAULT_COMPUTED);
   const [claims, setClaims] = useState(DEFAULT_CLAIMS);
   const [reconciliationMode, setReconciliationMode] = useState("manual");
@@ -414,6 +419,7 @@ export default function ImportPage() {
           basicSearchText,
           basicSearchFields,
           onMissingEntity,
+          newEntityTemplate,
           computedFields,
           claims,
         },
@@ -431,6 +437,7 @@ export default function ImportPage() {
       basicSearchText,
       basicSearchFields,
       onMissingEntity,
+      newEntityTemplate,
       computedFields,
       claims,
     ]
@@ -745,6 +752,57 @@ export default function ImportPage() {
                     <option value="skip">Omitir fila</option>
                   </select>
                 </div>
+
+                {onMissingEntity === "create" && (
+                  <div className="section-card light">
+                    <h3 className="section-title">Nueva entidad (valores por defecto)</h3>
+                    <div className="form-grid">
+                      <div className="form-group">
+                        <label>Label</label>
+                        <input
+                          type="text"
+                          value={newEntityTemplate.label}
+                          onChange={(event) =>
+                            setNewEntityTemplate((prev) => ({
+                              ...prev,
+                              label: event.target.value,
+                            }))
+                          }
+                          placeholder="{{label}}"
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label>Descripción</label>
+                        <textarea
+                          rows={2}
+                          value={newEntityTemplate.description}
+                          onChange={(event) =>
+                            setNewEntityTemplate((prev) => ({
+                              ...prev,
+                              description: event.target.value,
+                            }))
+                          }
+                          placeholder="{{descripcion}}"
+                        />
+                      </div>
+                      <div className="form-group full">
+                        <label>Aliases</label>
+                        <input
+                          type="text"
+                          value={newEntityTemplate.aliases}
+                          onChange={(event) =>
+                            setNewEntityTemplate((prev) => ({
+                              ...prev,
+                              aliases: event.target.value,
+                            }))
+                          }
+                          placeholder="{{alias_1}}, {{alias_2}}"
+                        />
+                        <span className="helper-text">Separar aliases por coma.</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </section>
           )}
