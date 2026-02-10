@@ -61,6 +61,18 @@
   background: var(--color-bg);
 }
 
+.file-button {
+  position: relative;
+  overflow: hidden;
+}
+
+.file-button input[type="file"] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
 .btn-icon {
   border: 1px solid var(--color-border-light);
   background: transparent;
@@ -486,6 +498,43 @@
   border-radius: var(--radius-md);
   overflow-x: auto;
   font-size: 0.8rem;
+}
+
+.config-summary {
+  padding: 0;
+}
+
+.config-summary > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: var(--spacing-lg);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+}
+
+.config-summary > summary::-webkit-details-marker {
+  display: none;
+}
+
+.summary-header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.summary-hint {
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
+.config-summary[open] > summary {
+  border-bottom: 1px solid var(--color-border-light);
+}
+
+.config-summary[open] pre {
+  margin: var(--spacing-lg);
 }
 
 .reconcile-preview {

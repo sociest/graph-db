@@ -88,12 +88,6 @@ export default function ImportPage() {
     },
   ];
 
-  const availableFields = useMemo(() => {
-    const mapped = fields.map((field) => field.name).filter(Boolean);
-    const computed = computedFields.map((field) => field.name).filter(Boolean);
-    return Array.from(new Set([...mapped, ...computed]));
-  }, [fields, computedFields]);
-
   function getFileFormat(fileObject) {
     const extension = fileObject?.name?.split(".").pop()?.toLowerCase();
     if (!extension) return null;
@@ -405,27 +399,25 @@ export default function ImportPage() {
     );
   }
 
-  const configPreview = useMemo(
-    () =>
-      JSON.stringify(
-        {
-          format,
-          delimiter,
-          hasHeader,
-          encoding,
-          dateFormat,
-          fields,
-          matchRules,
-          basicSearchText,
-          basicSearchFields,
-          onMissingEntity,
-          newEntityTemplate,
-          computedFields,
-          claims,
-        },
-        null,
-        2
-      ),
+  const configObject = useMemo(
+    () => ({
+      format,
+      delimiter,
+      hasHeader,
+      encoding,
+      dateFormat,
+      fields,
+      matchRules,
+      basicSearchText,
+      basicSearchFields,
+      onMissingEntity,
+      newEntityTemplate,
+      reconciliationMode,
+      confidenceThreshold,
+      reconciliationActions,
+      computedFields,
+      claims,
+    }),
     [
       format,
       delimiter,
@@ -438,10 +430,75 @@ export default function ImportPage() {
       basicSearchFields,
       onMissingEntity,
       newEntityTemplate,
+      reconciliationMode,
+      confidenceThreshold,
+      reconciliationActions,
       computedFields,
       claims,
     ]
   );
+
+  const configPreview = useMemo(() => JSON.stringify(configObject, null, 2), [configObject]);
+
+  function applyConfig(config) {
+    if (!config || typeof config !== "object") return;
+    setFormat(config.format ?? "csv");
+    setDelimiter(config.delimiter ?? ",");
+    setHasHeader(Boolean(config.hasHeader ?? true));
+    setEncoding(config.encoding ?? "utf-8");
+    setDateFormat(config.dateFormat ?? "YYYY-MM-DD");
+    setFields(Array.isArray(config.fields) ? config.fields : DEFAULT_FIELDS);
+    setMatchRules(Array.isArray(config.matchRules) ? config.matchRules : DEFAULT_MATCH_RULES);
+    setBasicSearchText(config.basicSearchText ?? "");
+    setBasicSearchFields({
+      label: config.basicSearchFields?.label ?? true,
+      aliases: config.basicSearchFields?.aliases ?? true,
+      description: config.basicSearchFields?.description ?? true,
+    });
+    setOnMissingEntity(config.onMissingEntity ?? "create");
+    setNewEntityTemplate({
+      label: config.newEntityTemplate?.label ?? "{{label}}",
+      description: config.newEntityTemplate?.description ?? "{{descripcion}}",
+      aliases: config.newEntityTemplate?.aliases ?? "{{aliases}}",
+    });
+    setReconciliationMode(config.reconciliationMode ?? "manual");
+    setConfidenceThreshold(
+      typeof config.confidenceThreshold === "number" ? config.confidenceThreshold : 0.8
+    );
+    setReconciliationActions({
+      autoMergeHigh: config.reconciliationActions?.autoMergeHigh ?? true,
+      autoCreateNoMatch: config.reconciliationActions?.autoCreateNoMatch ?? false,
+      autoSkipLow: config.reconciliationActions?.autoSkipLow ?? false,
+    });
+    setComputedFields(Array.isArray(config.computedFields) ? config.computedFields : DEFAULT_COMPUTED);
+    setClaims(Array.isArray(config.claims) ? config.claims : DEFAULT_CLAIMS);
+  }
+
+  function handleDownloadConfig() {
+    const blob = new Blob([JSON.stringify(configObject, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `import-config-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  async function handleLoadConfig(event) {
+    const selected = event.target.files?.[0];
+    if (!selected) return;
+    try {
+      const text = await selected.text();
+      const parsed = JSON.parse(text);
+      applyConfig(parsed);
+    } catch (error) {
+      setDetectError(error?.message || "No se pudo leer la configuración.");
+    } finally {
+      event.target.value = "";
+    }
+  }
 
   return (
     <div className="explorer-layout">
@@ -459,6 +516,13 @@ export default function ImportPage() {
             <div className="page-header-actions">
               <button type="button" className="btn btn-secondary">
                 Guardar borrador
+              </button>
+              <label className="btn btn-secondary file-button">
+                Cargar JSON
+                <input type="file" accept="application/json,.json" onChange={handleLoadConfig} />
+              </label>
+              <button type="button" className="btn btn-secondary" onClick={handleDownloadConfig}>
+                Descargar JSON
               </button>
               <button type="button" className="btn btn-primary">
                 Ejecutar importación
@@ -787,8 +851,8 @@ export default function ImportPage() {
                       </div>
                       <div className="form-group full">
                         <label>Aliases</label>
-                        <input
-                          type="text"
+                        <textarea
+                          rows={3}
                           value={newEntityTemplate.aliases}
                           onChange={(event) =>
                             setNewEntityTemplate((prev) => ({
@@ -796,9 +860,11 @@ export default function ImportPage() {
                               aliases: event.target.value,
                             }))
                           }
-                          placeholder="{{alias_1}}, {{alias_2}}"
+                          placeholder="{{alias_1}}\n{{alias_2}}"
                         />
-                        <span className="helper-text">Separar aliases por coma.</span>
+                        <span className="helper-text">
+                          Separar aliases por comas o nuevas líneas.
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -1175,13 +1241,16 @@ export default function ImportPage() {
             </button>
           </section>
 
-          <section className="section-card preview-card">
-            <div className="section-header">
-              <h2 className="section-title">Resumen de configuración</h2>
-              <span className="badge">Solo lectura</span>
-            </div>
+          <details className="section-card preview-card config-summary">
+            <summary>
+              <div className="summary-header">
+                <h2 className="section-title">Resumen de configuración</h2>
+                <span className="badge">Solo lectura</span>
+              </div>
+              <span className="summary-hint">Click para expandir</span>
+            </summary>
             <pre>{configPreview}</pre>
-          </section>
+          </details>
         </div>
       </main>
 
