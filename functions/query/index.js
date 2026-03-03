@@ -341,11 +341,24 @@ async function _searchClaimsBySchemaCondition(databases, claimSchema, limit = 50
     let currentOffset = 0;
     let hasMoreClaims = true;
 
+    // OPTIMIZATION: Push exact matches down to the DB if possible
+    const dbQueries = [
+        sdk.Query.equal("property", claimSchema.propertyId)
+    ];
+
+    if (claimSchema.value !== undefined && (!claimSchema.valueMatchMode || claimSchema.valueMatchMode === "equal")) {
+        const strVal = String(claimSchema.value);
+        if (strVal.length === 20 && /^[a-zA-Z0-9]+$/.test(strVal)) {
+            dbQueries.push(sdk.Query.equal("value_relation", strVal));
+            if (log) log(`[_searchClaimsBySchemaCondition] Pushed exact value_relation query for ${strVal} to DB`);
+        }
+    }
+
     while (hasMoreClaims && matchingSubjectIds.size < limit) {
         if (checkTimeout) checkTimeout();
         const loopT0 = Date.now();
         const claimsResult = await databases.listDocuments(DATABASE_ID, TABLES.CLAIMS, [
-            sdk.Query.equal("property", claimSchema.propertyId),
+            ...dbQueries,
             sdk.Query.limit(pageSize),
             sdk.Query.offset(currentOffset),
         ]);
@@ -782,19 +795,59 @@ module.exports = async ({ req, res, log, error }) => {
                 const limit = body.limit || 50;
                 const offset = body.offset || 0;
 
+                const returnsList = body.returns || body.schema.returns || null;
+
                 try {
                     const allIds = await _findEntityIds(databases, body.schema, limit + offset + 50, log, checkTimeout);
                     const pagedIds = allIds.slice(offset, offset + limit);
 
                     const entities = [];
+
+                    let dbSelects = null;
+                    let propSelects = [];
+                    if (returnsList && Array.isArray(returnsList)) {
+                        dbSelects = returnsList.filter(r => !r.startsWith("prop:")).map(r => r === "id" ? "$id" : r);
+                        if (dbSelects.length === 0) dbSelects = ["$id"];
+                        propSelects = returnsList.filter(r => r.startsWith("prop:")).map(r => r.replace("prop:", ""));
+                    }
+
                     for (const id of pagedIds) {
                         if (checkTimeout) checkTimeout();
                         try {
-                            const entity = await databases.getDocument(DATABASE_ID, TABLES.ENTITIES, id, [
-                                sdk.Query.select(["$id", "label", "description", "aliases", "$createdAt", "$updatedAt"])
-                            ]);
+                            const selectQuery = dbSelects ? [sdk.Query.select(dbSelects)] : [sdk.Query.select(["$id", "label", "description", "aliases", "$createdAt", "$updatedAt"])];
+                            const entity = await databases.getDocument(DATABASE_ID, TABLES.ENTITIES, id, selectQuery);
                             const data = typeof entity.data === 'string' ? JSON.parse(entity.data) : (entity.data || entity);
-                            entities.push({ ...entity, ...data });
+
+                            let resultObj = { ...entity, ...data };
+
+                            // Map specific claims if requested via returns logic
+                            if (propSelects.length > 0) {
+                                for (const propId of propSelects) {
+                                    resultObj[`prop:${propId}`] = null;
+                                    try {
+                                        const claimsList = await databases.listDocuments(DATABASE_ID, TABLES.CLAIMS, [
+                                            sdk.Query.equal("subject", id),
+                                            sdk.Query.equal("property", propId)
+                                        ]);
+                                        if (claimsList.documents.length > 0) {
+                                            const mappedClaims = claimsList.documents.map(d => {
+                                                const cdata = typeof d.data === 'string' ? JSON.parse(d.data) : (d.data || d);
+                                                return cdata.value_raw || cdata.value_relation?.$id || cdata.value_relation || null;
+                                            }).filter(Boolean);
+
+                                            if (mappedClaims.length === 1) resultObj[`prop:${propId}`] = mappedClaims[0];
+                                            else if (mappedClaims.length > 1) resultObj[`prop:${propId}`] = mappedClaims;
+                                        }
+                                    } catch (e) { }
+                                }
+                            } else if (returnsList) {
+                                // Clean up unrequested stuff if using explicit returns without props
+                                Object.keys(resultObj).forEach(k => {
+                                    if (!k.startsWith('$') && !dbSelects.includes(k) && k !== 'id') delete resultObj[k];
+                                });
+                            }
+
+                            entities.push(resultObj);
                         } catch (e) {
                             log(`Entidad ${id} no encontrada`);
                         }
